@@ -323,6 +323,8 @@ VALUE_PAIR *paircopyvp(const VALUE_PAIR *vp)
 {
 	size_t name_len;
 	VALUE_PAIR *n;
+
+	if (!vp) return NULL;
 	
 	if (!vp->flags.unknown_attr) {
 		name_len = 0;
@@ -364,7 +366,7 @@ VALUE_PAIR *paircopy2(VALUE_PAIR *vp, int attr)
 	last = &first;
 
 	while (vp) {
-		if (attr >= 0 && vp->attribute != attr) {
+		if ((vp->attribute != attr) && (attr != -1)) {
 			vp = vp->next;
 			continue;
 		}
@@ -443,6 +445,8 @@ void pairmove(VALUE_PAIR **to, VALUE_PAIR **from)
 			case T_OP_CMP_TRUE:
 			case T_OP_CMP_FALSE:
 			case T_OP_CMP_EQ:
+			case T_OP_REG_EQ:
+			case T_OP_REG_NE:
 				tailfrom = i;
 				continue;
 
@@ -963,7 +967,7 @@ VALUE_PAIR *pairparsevalue(VALUE_PAIR *vp, const char *value)
 				cs = s = strdup(value);
 				if (!s) return NULL;
 				p = strrchr(s, '+');
-				*p = 0;
+				if (p) *p = 0;
 				vp->flags.addport = 1;
 			} else {
 				p = NULL;
@@ -974,8 +978,8 @@ VALUE_PAIR *pairparsevalue(VALUE_PAIR *vp, const char *value)
 				fr_ipaddr_t ipaddr;
 
 				if (ip_hton(cs, AF_INET, &ipaddr) < 0) {
-					free(s);
 					fr_strerror_printf("Failed to find IP address for %s", cs);
+					free(s);
 					return NULL;
 				}
 
@@ -1670,7 +1674,7 @@ VALUE_PAIR *pairread(const char **ptr, FR_TOKEN *eol)
 
 	q = attr;
 	for (len = 0; len < sizeof(attr); len++) {
-		if (valid_attr_name[(int)*p]) {
+	  if (valid_attr_name[(int)*((const uint8_t *)p)]) {
 			*q++ = *p++;
 			continue;
 		}
@@ -1693,6 +1697,12 @@ VALUE_PAIR *pairread(const char **ptr, FR_TOKEN *eol)
 
 	attr[len] = '\0';
 	*ptr = p;
+
+	if (!*attr) {
+		*eol = T_OP_INVALID;
+		fr_strerror_printf("Invalid attribute name");
+		return NULL;
+	}
 
 	/* Now we should have an operator here. */
 	token = gettoken(ptr, buf, sizeof(buf));
@@ -1829,7 +1839,7 @@ VALUE_PAIR *pairread(const char **ptr, FR_TOKEN *eol)
  */
 FR_TOKEN userparse(const char *buffer, VALUE_PAIR **first_pair)
 {
-	VALUE_PAIR	*vp;
+	VALUE_PAIR	*vp, *head, **tail;
 	const char	*p;
 	FR_TOKEN	last_token = T_OP_INVALID;
 	FR_TOKEN	previous_token;
@@ -1840,20 +1850,30 @@ FR_TOKEN userparse(const char *buffer, VALUE_PAIR **first_pair)
 	if (buffer[0] == 0)
 		return T_EOL;
 
+	head = NULL;
+	tail = &head;
+
 	p = buffer;
 	do {
 		previous_token = last_token;
 		if ((vp = pairread(&p, &last_token)) == NULL) {
-			return last_token;
+			break;
 		}
-		pairadd(first_pair, vp);
+		*tail = vp;
+		tail = &((*tail)->next);
 	} while (*p && (last_token == T_COMMA));
 
 	/*
 	 *	Don't tell the caller that there was a comment.
 	 */
 	if (last_token == T_HASH) {
-		return previous_token;
+		last_token = previous_token;
+	}
+
+	if (last_token == T_OP_INVALID) {
+		pairfree(&head);
+	} else {
+		pairadd(first_pair, head);
 	}
 
 	/*
@@ -2025,11 +2045,23 @@ int paircmp(VALUE_PAIR *one, VALUE_PAIR *two)
 	case PW_TYPE_SHORT:
 	case PW_TYPE_INTEGER:
 	case PW_TYPE_DATE:
-		compare = two->vp_integer - one->vp_integer;
+		if (two->vp_integer < one->vp_integer) {
+			compare = -1;
+		} else if (two->vp_integer == one ->vp_integer) {
+			compare = 0;
+		} else {
+			compare = +1;
+		}
 		break;
 
 	case PW_TYPE_IPADDR:
-		compare = ntohl(two->vp_ipaddr) - ntohl(one->vp_ipaddr);
+		if (ntohl(two->vp_ipaddr)  < ntohl(one->vp_ipaddr) ) {
+			compare = -1;
+		} else if (ntohl(two->vp_ipaddr)  == ntohl(one->vp_ipaddr) ) {
+			compare = 0;
+		} else {
+			compare = +1;
+		}
 		break;
 
 	case PW_TYPE_IPV6ADDR:

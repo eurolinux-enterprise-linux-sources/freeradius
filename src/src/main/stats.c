@@ -58,6 +58,10 @@ void request_stats_final(REQUEST *request)
 	    (request->listener->type != RAD_LISTEN_AUTH) &&
 	    (request->listener->type != RAD_LISTEN_ACCT)) return;
 
+	/* don't count statistic requests */
+	if (request->packet->code == PW_STATUS_SERVER)
+		return;
+
 #undef INC_AUTH
 #define INC_AUTH(_x) radius_auth_stats._x++;request->listener->stats._x++;if (request->client && request->client->auth) request->client->auth->_x++;
 
@@ -73,7 +77,7 @@ void request_stats_final(REQUEST *request)
 	 *	deleted, because only the main server thread calls
 	 *	this function, which makes it thread-safe.
 	 */
-	switch (request->reply->code) {
+	if (request->reply && (request->packet->code != PW_STATUS_SERVER)) switch (request->reply->code) {
 	case PW_AUTHENTICATION_ACK:
 		INC_AUTH(total_responses);
 		INC_AUTH(total_access_accepts);
@@ -459,6 +463,8 @@ void request_stats_reply(REQUEST *request)
 			if (server_ip) {
 				pairadd(&request->reply->vps,
 					paircopyvp(server_ip));
+			}
+			if (server_port) {
 				pairadd(&request->reply->vps,
 					paircopyvp(server_port));
 			}

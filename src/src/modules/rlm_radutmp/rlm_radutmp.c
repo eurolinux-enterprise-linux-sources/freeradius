@@ -205,7 +205,7 @@ static int radutmp_accounting(void *instance, REQUEST *request)
 	 *	Which type is this.
 	 */
 	if ((vp = pairfind(request->packet->vps, PW_ACCT_STATUS_TYPE)) == NULL) {
-		radlog(L_ERR, "rlm_radutmp: No Accounting-Status-Type record.");
+		RDEBUG("No Accounting-Status-Type record.");
 		return RLM_MODULE_NOOP;
 	}
 	status = vp->vp_integer;
@@ -594,6 +594,7 @@ static int radutmp_checksimul(void *instance, REQUEST *request)
 	*login = '\0';
 	radius_xlat(login, sizeof(login), inst->username, request, NULL);
 	if (!*login) {
+		close(fd);
 		return RLM_MODULE_NOOP;
 	}
 
@@ -730,7 +731,7 @@ static int radutmp_checksimul(void *instance, REQUEST *request)
 module_t rlm_radutmp = {
 	RLM_MODULE_INIT,
 	"radutmp",
-	RLM_TYPE_CHECK_CONFIG_SAFE | RLM_TYPE_HUP_SAFE,   	/* type */
+	RLM_TYPE_THREAD_UNSAFE | RLM_TYPE_CHECK_CONFIG_SAFE | RLM_TYPE_HUP_SAFE,   	/* type */
 	radutmp_instantiate,          /* instantiation */
 	radutmp_detach,               /* detach */
 	{

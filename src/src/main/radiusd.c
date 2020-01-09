@@ -65,11 +65,13 @@ int log_stripped_names;
 int debug_flag = 0;
 int check_config = FALSE;
 
-const char *radiusd_version = "FreeRADIUS Version " RADIUSD_VERSION ", for host " HOSTINFO ", built on " __DATE__ " at " __TIME__;
+const char *radiusd_version = "FreeRADIUS Version " RADIUSD_VERSION_STRING
+#ifdef RADIUSD_VERSION_COMMIT
+" (git #" RADIUSD_VERSION_COMMIT ")"
+#endif
+", for host " HOSTINFO ", built on " __DATE__ " at " __TIME__;
 
 pid_t radius_pid;
-
-static int debug_memory = 0;
 
 /*
  *  Configuration items.
@@ -95,6 +97,17 @@ int main(int argc, char *argv[])
 	int spawn_flag = TRUE;
 	int dont_fork = FALSE;
 	int flag = 0;
+	int from_child[2] = {-1, -1};
+
+	int devnull;
+
+	/*
+	 *	If the server was built with debugging enabled always install
+	 *	the basic fatal signal handlers.
+	 */
+#ifndef NDEBUG
+	fr_fault_setup(getenv("PANIC_ACTION"), argv[0]);
+#endif
 
 #ifdef HAVE_SIGACTION
 	struct sigaction act;
@@ -180,7 +193,8 @@ int main(int argc, char *argv[])
 					fprintf(stderr, "radiusd: Failed to open log file %s: %s\n", mainconfig.log_file, strerror(errno));
 					exit(1);
 				}
-				break;		  
+				fr_log_fp = fdopen(mainconfig.radlog_fd, "a");
+				break;
 
 			case 'i':
 				if (ip_hton(optarg, AF_UNSPEC, &mainconfig.myip) < 0) {
@@ -195,7 +209,7 @@ int main(int argc, char *argv[])
 				break;
 
 			case 'm':
-				debug_memory = 1;
+				mainconfig.debug_memory = 1;
 				break;
 
 			case 'p':
@@ -218,9 +232,14 @@ int main(int argc, char *argv[])
 				break;
 
 			case 'v':
-				version();
-				break;
+				/* Don't print timestamps */
+				debug_flag += 2;
+				fr_log_fp = stdout;
+				mainconfig.radlog_dest = RADLOG_STDOUT;
+				mainconfig.radlog_fd = STDOUT_FILENO;
 
+				version();
+				exit(0);
 			case 'X':
 				spawn_flag = FALSE;
 				dont_fork = TRUE;
@@ -228,8 +247,8 @@ int main(int argc, char *argv[])
 				mainconfig.log_auth = TRUE;
 				mainconfig.log_auth_badpass = TRUE;
 				mainconfig.log_auth_goodpass = TRUE;
-				fr_log_fp = stdout;
 		do_stdout:
+				fr_log_fp = stdout;
 				mainconfig.radlog_dest = RADLOG_STDOUT;
 				mainconfig.radlog_fd = STDOUT_FILENO;
 				break;
@@ -249,28 +268,65 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	if (debug_flag) {
-		radlog(L_INFO, "%s", radiusd_version);
-		radlog(L_INFO, "Copyright (C) 1999-2009 The FreeRADIUS server project and contributors.\n");
-		radlog(L_INFO, "There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A\n");
-		radlog(L_INFO, "PARTICULAR PURPOSE.\n");
-		radlog(L_INFO, "You may redistribute copies of FreeRADIUS under the terms of the\n");
-		radlog(L_INFO, "GNU General Public License v2.\n");
-		fflush(NULL);
-	}
+	if (debug_flag)
+		version();
+
 
 	/*  Read the configuration files, BEFORE doing anything else.  */
 	if (read_mainconfig(0) < 0) {
 		exit(1);
 	}
 
+	/*
+	 *	Mismatch between build time OpenSSL and linked SSL,
+	 *	better to die here than segfault later.
+	 */
+	if (ssl_check_version(mainconfig.allow_vulnerable_openssl) < 0) {
+		exit(1);
+	}
+
+	/*  Load the modules AFTER doing SSL checks */
+	if (setup_modules(FALSE, mainconfig.config) < 0) {
+		return -1;
+	}
+
+	/* Set the panic action (if required) */
+	if (mainconfig.panic_action &&
+#ifndef NDEBUG
+	    !getenv("PANIC_ACTION") &&
+#endif
+	    (fr_fault_setup(mainconfig.panic_action, argv[0]) < 0)) {
+		exit(EXIT_FAILURE);
+	}
+
 #ifndef __MINGW32__
+
+	devnull = open("/dev/null", O_RDWR);
+	if (devnull < 0) {
+		radlog(L_ERR|L_CONS, "Failed opening /dev/null: %s\n", strerror(errno));
+		exit(1);
+	}
+
 	/*
 	 *  Disconnect from session
 	 */
 	if (dont_fork == FALSE) {
-		pid_t pid = fork();
+		pid_t pid;
 
+		/*
+		 *  Really weird things happen if we leave stdin open and call
+		 *  things like system() later.
+		 */
+		if (dont_fork == 0) {
+			dup2(devnull, STDIN_FILENO);
+		}
+
+		if (pipe(from_child) != 0) {
+			radlog(L_ERR, "Couldn't open pipe for child status: %s", strerror(errno));
+			exit(1);
+		}
+
+		pid = fork();
 		if (pid < 0) {
 			radlog(L_ERR, "Couldn't fork: %s", strerror(errno));
 			exit(1);
@@ -278,10 +334,37 @@ int main(int argc, char *argv[])
 
 		/*
 		 *  The parent exits, so the child can run in the background.
+		 *
+		 *  As the child can still encounter an error during initialisation
+		 *  we do a blocking read on a pipe between it and the parent.
+		 *
+		 *  Just before entering the event loop the child will
 		 */
 		if (pid > 0) {
+			uint8_t ret = 0;
+			int stat_loc;
+
+			/* So the pipe is correctly widowed if the child exits */
+			close(from_child[1]);
+
+			if ((read(from_child[0], &ret, 1) < 0)) {
+				ret = 0;
+			}
+
+			/* For cleanliness... */
+			close(from_child[0]);
+
+			/* Don't turn children into zombies */
+			if (!ret) {
+				waitpid(pid, &stat_loc, WNOHANG);
+				exit(1);
+			}
+
 			exit(0);
 		}
+
+		/* so the pipe is correctly widowed if the parent exits?! */
+		close(from_child[0]);
 #ifdef HAVE_SETSID
 		setsid();
 #endif
@@ -295,36 +378,74 @@ int main(int argc, char *argv[])
 	radius_pid = getpid();
 
 	/*
-	 *	If we're running as a daemon, close the default file
-	 *	descriptors, AFTER forking.
+	 *	STDOUT & STDERR go to /dev/null, unless we have "-x",
+	 *	then STDOUT & STDERR go to the "-l log" destination.
+	 *
+	 *	The complexity here is because "-l log" can go to
+	 *	STDOUT or STDERR, too.
 	 */
-	if (!debug_flag) {
-		int devnull;
+	if (mainconfig.radlog_dest == RADLOG_STDOUT) {
+		setlinebuf(stdout);
+		mainconfig.radlog_fd = STDOUT_FILENO;
 
-		devnull = open("/dev/null", O_RDWR);
-		if (devnull < 0) {
-			radlog(L_ERR|L_CONS, "Failed opening /dev/null: %s\n",
-			       strerror(errno));
-			exit(1);
-		}
-		dup2(devnull, STDIN_FILENO);
-		if (mainconfig.radlog_dest == RADLOG_STDOUT) {
-			setlinebuf(stdout);
-			mainconfig.radlog_fd = STDOUT_FILENO;
-		} else {
-			dup2(devnull, STDOUT_FILENO);
-		}
-		if (mainconfig.radlog_dest == RADLOG_STDERR) {
-			setlinebuf(stderr);
-			mainconfig.radlog_fd = STDERR_FILENO;
+		/*
+		 *	If we're debugging, allow STDERR to go to
+		 *	STDOUT too, for executed programs,
+		 */
+		if (debug_flag) {
+			dup2(STDOUT_FILENO, STDERR_FILENO);
 		} else {
 			dup2(devnull, STDERR_FILENO);
 		}
-		close(devnull);
+
+	} else if (mainconfig.radlog_dest == RADLOG_STDERR) {
+		setlinebuf(stderr);
+		mainconfig.radlog_fd = STDERR_FILENO;
+
+		/*
+		 *	If we're debugging, allow STDOUT to go to
+		 *	STDERR too, for executed programs,
+		 */
+		if (debug_flag) {
+			dup2(STDERR_FILENO, STDOUT_FILENO);
+		} else {
+			dup2(devnull, STDOUT_FILENO);
+		}
+
+	} else if (mainconfig.radlog_dest == RADLOG_SYSLOG) {
+		/*
+		 *	Discard STDOUT and STDERR no matter what the
+		 *	status of debugging.  Syslog isn't a file
+		 *	descriptor, so we can't use it.
+		 */
+		dup2(devnull, STDOUT_FILENO);
+		dup2(devnull, STDERR_FILENO);
+
+	} else if (debug_flag) {
+		/*
+		 *	If we're debugging, allow STDOUT and STDERR to
+		 *	go to the log file.
+		 */
+		dup2(mainconfig.radlog_fd, STDOUT_FILENO);
+		dup2(mainconfig.radlog_fd, STDERR_FILENO);
 
 	} else {
-		setlinebuf(stdout); /* unbuffered output */
+		/*
+		 *	Not debugging, and the log isn't STDOUT or
+		 *	STDERR.  Ensure that we move both of them to
+		 *	/dev/null, so that the calling terminal can
+		 *	exit, and the output from executed programs
+		 *	doesn't pollute STDOUT / STDERR.
+		 */
+		dup2(devnull, STDOUT_FILENO);
+		dup2(devnull, STDERR_FILENO);
 	}
+
+	close(devnull);
+
+	/*
+	 *	Now we have logging check that the OpenSSL
+	 */
 
 	/*
 	 *	Initialize the event pool, including threads.
@@ -355,7 +476,7 @@ int main(int argc, char *argv[])
 	 *	server to die immediately.  Use SIGTERM to shut down
 	 *	the server cleanly in that case.
 	 */
-	if ((debug_memory == 1) || (debug_flag == 0)) {
+	if ((mainconfig.debug_memory == 1) || (debug_flag == 0)) {
 #ifdef HAVE_SIGACTION
 	        act.sa_handler = sig_fatal;
 		sigaction(SIGINT, &act, NULL);
@@ -400,6 +521,14 @@ int main(int argc, char *argv[])
 			       mainconfig.pid_file, strerror(errno));
 			exit(1);
 		}
+
+		/*
+		 *  	Inform parent (who should still be waiting) that
+		 *	the rest of initialisation went OK, and that it
+		 * 	should exit with a 0 status.
+		 */
+		write(from_child[1], "\001", 1);
+		close(from_child[1]);
 	}
 
 	/*
@@ -416,6 +545,7 @@ int main(int argc, char *argv[])
 		rcode = 2;
 	} else {
 		radlog(L_INFO, "Exiting normally.");
+		rcode = 1;
 	}
 
 	/*
@@ -423,7 +553,7 @@ int main(int argc, char *argv[])
 	 *	about to die.
 	 */
 	signal(SIGTERM, SIG_IGN);
-	
+
 	/*
 	 *	Send a TERM signal to all
 	 *	associated processes
@@ -433,7 +563,7 @@ int main(int argc, char *argv[])
 #ifndef __MINGW32__
 	if (spawn_flag) kill(-radius_pid, SIGTERM);
 #endif
-	
+
 	/*
 	 *	We're exiting, so we can delete the PID
 	 *	file.  (If it doesn't exist, we can ignore
@@ -442,23 +572,23 @@ int main(int argc, char *argv[])
 	if (dont_fork == FALSE) {
 		unlink(mainconfig.pid_file);
 	}
-		
+
 	radius_event_free();
-	
-	/*
-	 *	Free the configuration items.
-	 */
-	free_mainconfig();
-	
+
 	/*
 	 *	Detach any modules.
 	 */
 	detach_modules();
-	
+
 	xlat_free();		/* modules may have xlat's */
 
+	/*
+	 *	Free the configuration items.
+	 */
+	free_mainconfig();
+
 	free(radius_dir);
-		
+
 #ifdef WIN32
 	WSACleanup();
 #endif
@@ -511,7 +641,7 @@ static void sig_fatal(int sig)
 #ifdef SIGQUIT
 		case SIGQUIT:
 #endif
-			if (debug_memory) {
+			if (mainconfig.debug_memory) {
 				radius_signal_self(RADIUS_SIGNAL_SELF_TERM);
 				break;
 			}

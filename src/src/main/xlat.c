@@ -26,10 +26,13 @@
 RCSID("$Id$")
 
 #include	<freeradius-devel/radiusd.h>
-#include	<freeradius-devel/md5.h>
 #include	<freeradius-devel/rad_assert.h>
+#include	<freeradius-devel/base64.h>
+#include	<freeradius-devel/dhcp.h>
 
 #include	<ctype.h>
+
+extern int log_dates_utc; /* log.c */
 
 typedef struct xlat_t {
 	char		module[MAX_STRING_LEN];
@@ -59,9 +62,10 @@ static const char * const internal_xlat[] = {"check",
 #endif
 static const int xlat_inst[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8 };	/* up to 8 for regex */
 
+char const *radiusd_short_version = RADIUSD_VERSION_STRING;
 
-/*
- *	Convert the value on a VALUE_PAIR to string
+/**
+ * @brief Convert the value on a VALUE_PAIR to string
  */
 static int valuepair2str(char * out,int outlen,VALUE_PAIR * pair,
 			 int type, RADIUS_ESCAPE_STRING func)
@@ -69,7 +73,7 @@ static int valuepair2str(char * out,int outlen,VALUE_PAIR * pair,
 	char buffer[MAX_STRING_LEN * 4];
 
 	if (pair != NULL) {
-		vp_prints_value(buffer, sizeof(buffer), pair, -1);
+		vp_prints_value(buffer, sizeof(buffer), pair, 0);
 		return func(out, outlen, buffer);
 	}
 
@@ -95,6 +99,23 @@ static int valuepair2str(char * out,int outlen,VALUE_PAIR * pair,
 	return strlen(out);
 }
 
+static VALUE_PAIR *pairfind_tag(VALUE_PAIR *vps, int attr, int tag)
+{
+	VALUE_PAIR *vp = vps;
+
+redo:
+	vp = pairfind(vp, attr);
+	if (!tag) return vp;
+
+	if (!vp) return NULL;
+
+	if (!vp->flags.has_tag) return NULL;
+
+	if (vp->flags.tag == tag) return vp;
+
+	vp = vp->next;
+	goto redo;
+}
 
 /*
  *	Dynamically translate for check:, request:, reply:, etc.
@@ -143,20 +164,20 @@ static size_t xlat_packet(void *instance, REQUEST *request,
 			packet = request->parent->packet;
 		}
 		break;
-			
+
 	case 6:
 		if (request->parent && request->parent->reply) {
 			vps = request->parent->reply->vps;
 			packet = request->parent->reply;
 		}
 		break;
-			
+
 	case 7:
 		if (request->parent) {
 			vps = request->parent->config_items;
 		}
 		break;
-			
+
 	default:		/* WTF? */
 		return 0;
 	}
@@ -167,56 +188,95 @@ static size_t xlat_packet(void *instance, REQUEST *request,
 	da = dict_attrbyname(fmt);
 	if (!da) {
 		int do_number = FALSE;
-		size_t count;
-		const char *p;
+		int do_array = FALSE;
+		int do_count = FALSE;
+		int do_all = FALSE;
+		int tag = 0;
+		size_t count = 0, total;
+		char *p;
 		char buffer[256];
 
 		if (strlen(fmt) > sizeof(buffer)) return 0;
 
-		p = strchr(fmt, '[');
-		if (!p) {
-			p = strchr(fmt, '#');
-			if (!p) return 0;
+		strlcpy(buffer, fmt, sizeof(buffer));
+
+		/*
+		 *	%{Attribute-name#} - print integer version of it.
+		 */
+		p = buffer + strlen(buffer) - 1;
+		if (*p == '#') {
+			*p = '\0';
 			do_number = TRUE;
 		}
 
-		strlcpy(buffer, fmt, p - fmt + 1);
+		/*
+		 *	%{Attribute-Name:tag} - get the name with the specified
+		 *	value of the tag.
+		 */
+		p = strchr(buffer, ':');
+		if (p && (p[1] != '-')) {
+			tag = atoi(p + 1);
+			*p = '\0';
+			p++;
+
+		} else {
+			/*
+			 *	Allow %{Attribute-Name:tag[...]}
+			 */
+			p = buffer;
+		}
+
+		/*
+		 *	%{Attribute-Name[...] does more stuff
+		 */
+		p = strchr(p, '[');
+		if (p) {
+			*p = '\0';
+			do_array = TRUE;
+			if (p[1] == '#') {
+				do_count = TRUE;
+			} else if (p[1] == '*') {
+				do_all = TRUE;
+			} else {
+				count = atoi(p + 1);
+				p += 1 + strspn(p + 1, "0123456789");
+				if (*p != ']') {
+					RDEBUG2("xlat: Invalid array reference in string at %s %s",
+						fmt, p);
+					return 0;
+				}
+			}
+		}
+
+		/*
+		 *	We COULD argue about %{Attribute-Name[#]#} etc.
+		 *	But that looks like more work than it's worth.
+		 */
 
 		da = dict_attrbyname(buffer);
 		if (!da) return 0;
 
-		if (do_number) {
-			vp = pairfind(vps, da->attr);
-			if (!vp) return 0;
-
-			switch (da->type) {
-			default:
-				break;
-
-			case PW_TYPE_INTEGER:
-			case PW_TYPE_DATE:
-			case PW_TYPE_SHORT:
-			case PW_TYPE_BYTE:
-				snprintf(out, outlen, "%u", vp->lvalue);
-				return strlen(out);
-			}
-
+		/*
+		 *	No array, print the tagged attribute.
+		 */
+		if (!do_array) {
+			vp = pairfind_tag(vps, da->attr, tag);
 			goto just_print;
 		}
 
-		/*
-		 *	%{Attribute-Name[#]} returns the count of
-		 *	attributes of that name in the list.
-		 */
-		if ((p[1] == '#') && (p[2] == ']')) {
-			count = 0;
+		total = 0;
 
-			for (vp = pairfind(vps, da->attr);
+		/*
+		 *	Array[#] - return the total
+		 */
+		if (do_count) {
+			for (vp = pairfind_tag(vps, da->attr, tag);
 			     vp != NULL;
-			     vp = pairfind(vp->next, da->attr)) {
-				count++;
+			     vp = pairfind_tag(vp->next, da->attr, tag)) {
+				total++;
 			}
-			snprintf(out, outlen, "%d", (int) count);
+
+			snprintf(out, outlen, "%d", (int) total);
 			return strlen(out);
 		}
 
@@ -224,12 +284,10 @@ static size_t xlat_packet(void *instance, REQUEST *request,
 		 *	%{Attribute-Name[*]} returns ALL of the
 		 *	the attributes, separated by a newline.
 		 */
-		if ((p[1] == '*') && (p[2] == ']')) {
-			int total = 0;
-
-			for (vp = pairfind(vps, da->attr);
+		if (do_all) {
+			for (vp = pairfind_tag(vps, da->attr, tag);
 			     vp != NULL;
-			     vp = pairfind(vp->next, da->attr)) {
+			     vp = pairfind_tag(vp->next, da->attr, tag)) {
 				count = valuepair2str(out, outlen - 1, vp, da->type, func);
 				rad_assert(count <= outlen);
 				total += count + 1;
@@ -245,33 +303,39 @@ static size_t xlat_packet(void *instance, REQUEST *request,
 			return total;
 		}
 
-		count = atoi(p + 1);
-
-		/*
-		 *	Skip the numbers.
-		 */
-		p += 1 + strspn(p + 1, "0123456789");
-		if (*p != ']') {
-			RDEBUG2("xlat: Invalid array reference in string at %s %s",
-			       fmt, p);
-			return 0;
-		}
-
 		/*
 		 *	Find the N'th value.
 		 */
-		for (vp = pairfind(vps, da->attr);
+		for (vp = pairfind_tag(vps, da->attr, tag);
 		     vp != NULL;
-		     vp = pairfind(vp->next, da->attr)) {
-			if (count == 0) break;
-			count--;
+		     vp = pairfind_tag(vp->next, da->attr, tag)) {
+			if (total == count) break;
+			total++;
+			if (total > count) {
+				vp = NULL;
+				break;
+			}
 		}
 
 		/*
 		 *	Non-existent array reference.
 		 */
-		if (!vp) return 0;
 	just_print:
+		if (!vp) return 0;
+
+		if (do_number) {
+			if ((vp->type != PW_TYPE_IPADDR) &&
+			    (vp->type != PW_TYPE_INTEGER) &&
+			    (vp->type != PW_TYPE_SHORT) &&
+			    (vp->type != PW_TYPE_BYTE) &&
+			    (vp->type != PW_TYPE_DATE)) {
+				*out = '\0';
+				return 0;
+			}
+
+			return snprintf(out, outlen, "%u", vp->vp_integer);
+		}
+
 		return valuepair2str(out, outlen, vp, da->type, func);
 	}
 
@@ -475,6 +539,129 @@ static size_t xlat_string(UNUSED void *instance, REQUEST *request,
 	return len;
 }
 
+/**
+ * @brief Print data as hex, not as VALUE.
+ */
+static size_t xlat_hex(UNUSED void *instance, REQUEST *request,
+		       char *fmt, char *out, size_t outlen,
+		       UNUSED RADIUS_ESCAPE_STRING func)
+{
+	size_t i;
+	VALUE_PAIR *vp;
+	uint8_t	buffer[MAX_STRING_LEN];
+	ssize_t	ret;
+	size_t	len;
+
+	while (isspace((int) *fmt)) fmt++;
+
+	if (!radius_get_vp(request, fmt, &vp) || !vp) {
+		*out = '\0';
+		return 0;
+	}
+
+	ret = rad_vp2data(vp, buffer, sizeof(buffer));
+	len = (size_t) ret;
+
+	/*
+	 *	Don't truncate the data.
+	 */
+	if ((ret < 0 ) || (outlen < (len * 2))) {
+		*out = 0;
+		return 0;
+	}
+
+	for (i = 0; i < len; i++) {
+		snprintf(out + 2*i, 3, "%02x", buffer[i]);
+	}
+
+	return len * 2;
+}
+
+/**
+ * @brief Print data as base64, not as VALUE
+ */
+static size_t xlat_base64(UNUSED void *instance, REQUEST *request,
+			  char *fmt, char *out, size_t outlen,
+			  UNUSED RADIUS_ESCAPE_STRING func)
+{
+	VALUE_PAIR *vp;
+	uint8_t buffer[MAX_STRING_LEN];
+	ssize_t	ret;
+	size_t	len;
+	size_t	enc;
+
+	while (isspace((int) *fmt)) fmt++;
+
+	if (!radius_get_vp(request, fmt, &vp) || !vp) {
+		*out = '\0';
+		return 0;
+	}
+
+	ret = rad_vp2data(vp, buffer, sizeof(buffer));
+	if (ret < 0) {
+		*out = 0;
+		return 0;
+	}
+
+	len = (size_t) ret;
+
+	enc = FR_BASE64_ENC_LENGTH(len);
+
+	/*
+	 *	Don't truncate the data.
+	 */
+	if (outlen < (enc + 1)) {
+		*out = 0;
+		return 0;
+	}
+
+	fr_base64_encode(buffer, len, out, outlen);
+
+	return enc;
+}
+
+#ifdef WITH_DHCP
+static size_t xlat_dhcp_options(UNUSED void *instance, REQUEST *request,
+			       char *fmt, char *out, size_t outlen,
+			       UNUSED RADIUS_ESCAPE_STRING func)
+{
+	VALUE_PAIR *vp, *head = NULL, *next;
+	int decoded = 0;
+
+	while (isspace((int) *fmt)) fmt++;
+
+	if (!radius_get_vp(request, fmt, &vp) || !vp) {
+		*out = '\0';
+
+		return 0;
+	}
+
+	if ((fr_dhcp_decode_options(vp->vp_octets, vp->length, &head) < 0) ||
+	    (head == NULL)) {
+		RDEBUG("WARNING: DHCP option decoding failed");
+		goto fail;
+	}
+
+	next = head;
+
+	do {
+		next = next->next;
+		decoded++;
+	} while (next);
+
+	pairmove(&(request->packet->vps), &head);
+
+	/* Free any unmoved pairs */
+	pairfree(&head);
+
+	fail:
+
+	snprintf(out, outlen, "%i", decoded);
+
+	return strlen(out);
+}
+#endif
+
 #ifdef HAVE_REGEX_H
 /*
  *	Pull %{0} to %{8} out of the packet.
@@ -506,8 +693,10 @@ static size_t xlat_regex(void *instance, REQUEST *request,
 #endif				/* HAVE_REGEX_H */
 
 
-/*
- *	Change the debugging level.
+/**
+ * @brief Dynamically change the debugging level for the current request
+ *
+ * Example %{debug:3}
  */
 static size_t xlat_debug(UNUSED void *instance, REQUEST *request,
 			  char *fmt, char *out, size_t outlen,
@@ -515,8 +704,18 @@ static size_t xlat_debug(UNUSED void *instance, REQUEST *request,
 {
 	int level = 0;
 
-	if (*fmt) level = atoi(fmt);
+	/*
+	 *  Expand to previous (or current) level
+	 */
+	snprintf(out, outlen, "%d", request->options & RAD_REQUEST_OPTION_DEBUG4);
 
+	/*
+	 *  Assume we just want to get the current value and NOT set it to 0
+	 */
+	if (!*fmt)
+		goto done;
+
+	level = atoi(fmt);
 	if (level == 0) {
 		request->options = RAD_REQUEST_OPTION_NONE;
 		request->radlog = NULL;
@@ -527,102 +726,9 @@ static size_t xlat_debug(UNUSED void *instance, REQUEST *request,
 		request->radlog = radlog_request;
 	}
 
-	snprintf(out, outlen, "%d", level);
+	done:
 	return strlen(out);
 }
-
-
-/*
- *	Calculate the MD5 hash of a string.
- */
-static size_t xlat_md5(UNUSED void *instance, REQUEST *request,
-		       char *fmt, char *out, size_t outlen,
-		       UNUSED RADIUS_ESCAPE_STRING func)
-{
-	int i;
-	uint8_t digest[16];
-	FR_MD5_CTX ctx;
-	char buffer[1024];
-
-	if (!radius_xlat(buffer, sizeof(buffer), fmt, request, func)) {
-		*out = '\0';
-		return 0;
-	}
-
-	fr_MD5Init(&ctx);
-	fr_MD5Update(&ctx, (void *) buffer, strlen(buffer));
-	fr_MD5Final(digest, &ctx);
-
-	if (outlen < 33) {
-		snprintf(out, outlen, "md5_overflow");
-		return strlen(out);
-	}
-
-	for (i = 0; i < 16; i++) {
-		snprintf(out + i * 2, 3, "%02x", digest[i]);
-	}
-
-	return strlen(out);
-}
-
-
-/*
- *	Convert a string to lowercase
- */
-static size_t xlat_lc(UNUSED void *instance, REQUEST *request,
-		       char *fmt, char *out, size_t outlen,
-		       UNUSED RADIUS_ESCAPE_STRING func)
-{
-	char *p, *q;
-	char buffer[1024];
-
-	if (outlen <= 1) return 0;
-
-	if (!radius_xlat(buffer, sizeof(buffer), fmt, request, func)) {
-		*out = '\0';
-		return 0;
-	}
-
-	for (p = buffer, q = out; *p != '\0'; p++, outlen--) {
-		if (outlen <= 1) break;
-
-		*(q++) = tolower((int) *p);
-	}
-
-	*q = '\0';
-
-	return strlen(out);
-}
-
-
-/*
- *	Convert a string to uppercase
- */
-static size_t xlat_uc(UNUSED void *instance, REQUEST *request,
-		       char *fmt, char *out, size_t outlen,
-		       UNUSED RADIUS_ESCAPE_STRING func)
-{
-	char *p, *q;
-	char buffer[1024];
-
-	if (outlen <= 1) return 0;
-
-	if (!radius_xlat(buffer, sizeof(buffer), fmt, request, func)) {
-		*out = '\0';
-		return 0;
-	}
-
-	for (p = buffer, q = out; *p != '\0'; p++, outlen--) {
-		if (outlen <= 1) break;
-
-		*(q++) = toupper((int) *p);
-	}
-
-	*q = '\0';
-
-	return strlen(out);
-}
-
 
 /*
  *	Compare two xlat_t structs, based ONLY on the module name.
@@ -638,21 +744,13 @@ static int xlat_cmp(const void *a, const void *b)
 		      ((const xlat_t *)a)->length);
 }
 
+
 /*
  *	find the appropriate registered xlat function.
  */
 static xlat_t *xlat_find(const char *module)
 {
 	xlat_t my_xlat;
-
-	/*
-	 *	Look for dictionary attributes first.
-	 */
-	if ((dict_attrbyname(module) != NULL) ||
-	    (strchr(module, '[') != NULL) ||
-	    (strchr(module, '#') != NULL)) {
-		module = "request";
-	}
 
 	strlcpy(my_xlat.module, module, sizeof(my_xlat.module));
 	my_xlat.length = strlen(my_xlat.module);
@@ -669,7 +767,7 @@ int xlat_register(const char *module, RAD_XLAT_FUNC func, void *instance)
 	xlat_t	*c;
 	xlat_t	my_xlat;
 
-	if ((module == NULL) || (strlen(module) == 0)) {
+	if (!module || !*module) {
 		DEBUG("xlat_register: Invalid module name");
 		return -1;
 	}
@@ -710,8 +808,18 @@ int xlat_register(const char *module, RAD_XLAT_FUNC func, void *instance)
 		rad_assert(c != NULL);
 		c->internal = TRUE;
 
+		xlat_register("hex", xlat_hex, "");
+		c = xlat_find("hex");
+		rad_assert(c != NULL);
+		c->internal = TRUE;
+
 		xlat_register("integer", xlat_integer, "");
 		c = xlat_find("integer");
+		rad_assert(c != NULL);
+		c->internal = TRUE;
+
+		xlat_register("base64", xlat_base64, "");
+		c = xlat_find("base64");
 		rad_assert(c != NULL);
 		c->internal = TRUE;
 
@@ -719,6 +827,13 @@ int xlat_register(const char *module, RAD_XLAT_FUNC func, void *instance)
 		c = xlat_find("string");
 		rad_assert(c != NULL);
 		c->internal = TRUE;
+
+#ifdef WITH_DHCP
+		xlat_register("dhcp_options", xlat_dhcp_options, "");
+		c = xlat_find("dhcp_options");
+		rad_assert(c != NULL);
+		c->internal = TRUE;
+#endif
 
 #ifdef HAVE_REGEX_H
 		/*
@@ -737,21 +852,6 @@ int xlat_register(const char *module, RAD_XLAT_FUNC func, void *instance)
 
 		xlat_register("debug", xlat_debug, &xlat_inst[0]);
 		c = xlat_find("debug");
-		rad_assert(c != NULL);
-		c->internal = TRUE;
-
-		xlat_register("md5", xlat_md5, &xlat_inst[0]);
-		c = xlat_find("md5");
-		rad_assert(c != NULL);
-		c->internal = TRUE;
-
-		xlat_register("tolower", xlat_lc, &xlat_inst[0]);
-		c = xlat_find("tolower");
-		rad_assert(c != NULL);
-		c->internal = TRUE;
-
-		xlat_register("toupper", xlat_uc, &xlat_inst[0]);
-		c = xlat_find("toupper");
 		rad_assert(c != NULL);
 		c->internal = TRUE;
 	}
@@ -795,9 +895,9 @@ int xlat_register(const char *module, RAD_XLAT_FUNC func, void *instance)
  *	We can only have one function to call per name, so the
  *	passing of "func" here is extraneous.
  */
-void xlat_unregister(const char *module, RAD_XLAT_FUNC func)
+void xlat_unregister(const char *module, RAD_XLAT_FUNC func, void *instance)
 {
-	rbnode_t	*node;
+	xlat_t	*c;
 	xlat_t		my_xlat;
 
 	func = func;		/* -Wunused */
@@ -807,10 +907,12 @@ void xlat_unregister(const char *module, RAD_XLAT_FUNC func)
 	strlcpy(my_xlat.module, module, sizeof(my_xlat.module));
 	my_xlat.length = strlen(my_xlat.module);
 
-	node = rbtree_find(xlat_root, &my_xlat);
-	if (!node) return;
+	c = rbtree_finddata(xlat_root, &my_xlat);
+	if (!c) return;
 
-	rbtree_delete(xlat_root, node);
+	if (c->instance != instance) return;
+
+	rbtree_deletebydata(xlat_root, c);
 }
 
 /*
@@ -831,7 +933,7 @@ static int decode_attribute(const char **from, char **to, int freespace,
 			     RADIUS_ESCAPE_STRING func)
 {
 	int	do_length = 0;
-	char	*xlat_name, *xlat_str;
+	char	*module_name, *xlat_str;
 	char *p, *q, *l, *next = NULL;
 	int retlen=0;
 	const xlat_t *c;
@@ -959,7 +1061,7 @@ static int decode_attribute(const char **from, char **to, int freespace,
 	/*
 	 *	See if we're supposed to expand a module name.
 	 */
-	xlat_name = NULL;
+	module_name = NULL;
 	for (l = p; *l != '\0'; l++) {
 		if (*l == '\\') {
 			l++;
@@ -967,8 +1069,32 @@ static int decode_attribute(const char **from, char **to, int freespace,
 		}
 
 		if (*l == ':') {
-			xlat_name = p; /* start of name */
+			if (l[1] == '-') {
+				RDEBUG2("WARNING: Deprecated conditional expansion \":-\".  See \"man unlang\" for details");
+				module_name = internal_xlat[1];
+				xlat_str = p;
+				*l = '\0';
+				next = l + 2;
+				goto do_xlat;
+			}
+
+			module_name = p; /* start of name */
 			*l = '\0';
+
+			/*
+			 *	%{Tunnel-Password:0}
+			 *
+			 *		OR
+			 *
+			 *	%{expr:0 + 1}
+			 */
+			if (isdigit(l[1]) &&
+			    (dict_attrbyname(module_name) != NULL)) {
+				module_name = NULL;
+				*l = ':';
+				break;
+			}
+
 			p = l + 1;
 			break;
 		}
@@ -983,20 +1109,13 @@ static int decode_attribute(const char **from, char **to, int freespace,
 	 *	%{name} is a simple attribute reference,
 	 *	or regex reference.
 	 */
-	if (!xlat_name) {
-		xlat_name = xlat_str = p;
-		goto do_xlat;
-	}
-
-	/*
-	 *	Maybe it's the old-style %{foo:-bar}
-	 */
-	if (*p == '-') {
-		RDEBUG2("WARNING: Deprecated conditional expansion \":-\".  See \"man unlang\" for details");
-		p++;
-
-		xlat_str = xlat_name;
-		next = p;
+	if (!module_name) {
+		if (isdigit(*p) && !p[1]) { /* regex 0..8 */
+			module_name = xlat_str = p;
+		} else {
+			module_name = internal_xlat[1];
+			xlat_str = p;
+		}
 		goto do_xlat;
 	}
 
@@ -1007,35 +1126,36 @@ static int decode_attribute(const char **from, char **to, int freespace,
 
 	/* module name, followed by (possibly) per-module string */
 	xlat_str = p;
-	
+
 do_xlat:
-	if ((c = xlat_find(xlat_name)) != NULL) {
-		if (!c->internal) RDEBUG3("radius_xlat: Running registered xlat function of module %s for string \'%s\'",
-					  c->module, xlat_str);
-		retlen = c->do_xlat(c->instance, request, xlat_str,
-				    q, freespace, func);
-		if (retlen > 0) {
-			if (do_length) {
-				snprintf(q, freespace, "%d", retlen);
-				retlen = strlen(q);
-			}
-
-		} else if (next) {
-			/*
-			 *	Expand the second bit.
-			 */
-			RDEBUG2("\t... expanding second conditional");
-			retlen = radius_xlat(q, freespace, next, request, func);
+	c = xlat_find(module_name);
+	if (!c) {
+		if (module_name == internal_xlat[1]) {
+			RDEBUG2("WARNING: Unknown Attribute \"%s\" in string expansion \"%%%s\"", module_name, *from);
+		} else {
+			RDEBUG2("WARNING: Unknown module \"%s\" in string expansion \"%%%s\"", module_name, *from);
 		}
-		q += retlen;
-
-	} else {
-		/*
-		 *	No attribute by that name, return an error.
-		 */
-		RDEBUG2("WARNING: Unknown module \"%s\" in string expansion \"%%%s\"", xlat_name, *from);
 		return -1;
 	}
+
+	if (!c->internal) RDEBUG3("radius_xlat: Running registered xlat function of module %s for string \'%s\'",
+				  c->module, xlat_str);
+	retlen = c->do_xlat(c->instance, request, xlat_str,
+			    q, freespace, func);
+	if (retlen > 0) {
+		if (do_length) {
+			snprintf(q, freespace, "%d", retlen);
+			retlen = strlen(q);
+		}
+
+	} else if (next) {
+		/*
+		 *	Expand the second bit.
+		 */
+		RDEBUG2("\t... expanding second conditional");
+		retlen = radius_xlat(q, freespace, next, request, func);
+	}
+	q += retlen;
 
 done:
 	*to = q;
@@ -1212,7 +1332,14 @@ int radius_xlat(char *out, int outlen, const char *fmt,
 				p++;
 				break;
 			case 't': /* request timestamp */
-				CTIME_R(&request->timestamp, tmpdt, sizeof(tmpdt));
+#ifdef HAVE_GMTIME_R
+				if (log_dates_utc) {
+					struct tm utc;
+					gmtime_r(&request->timestamp, &utc);
+					asctime_r(&utc, tmpdt);
+				} else
+#endif
+					CTIME_R(&request->timestamp, tmpdt, sizeof(tmpdt));
 				nl = strchr(tmpdt, '\n');
 				if (nl) *nl = '\0';
 				strlcpy(q, tmpdt, freespace);
@@ -1223,6 +1350,11 @@ int radius_xlat(char *out, int outlen, const char *fmt,
 				q += valuepair2str(q,freespace,pairfind(request->packet->vps,PW_USER_NAME),PW_TYPE_STRING, func);
 				p++;
 				break;
+			case 'v': /* server version */
+				strlcpy(q,radiusd_short_version,freespace);
+                                q += strlen(q);
+                                p++;
+                                break;
 			case 'A': /* radacct_dir */
 				strlcpy(q,radacct_dir,freespace);
 				q += strlen(q);
@@ -1251,9 +1383,24 @@ int radius_xlat(char *out, int outlen, const char *fmt,
 				}
 				p++;
 				break;
+			case 'I': /* Request ID */
+				snprintf(tmpdt, sizeof(tmpdt), "%i", request->packet->id);
+				strlcpy(q, tmpdt, freespace);
+				q += strlen(q);
+				p++;
+				break;
 			case 'L': /* radlog_dir */
 				strlcpy(q,radlog_dir,freespace);
 				q += strlen(q);
+				p++;
+				break;
+			case 'G': /* request minute */
+				TM = localtime_r(&request->timestamp, &s_TM);
+				len = strftime(tmpdt, sizeof(tmpdt), "%M", TM);
+				if (len > 0) {
+					strlcpy(q, tmpdt, freespace);
+					q += strlen(q);
+				}
 				p++;
 				break;
 			case 'M': /* MTU */

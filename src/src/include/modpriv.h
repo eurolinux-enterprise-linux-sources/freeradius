@@ -9,7 +9,11 @@
 #include <freeradius-devel/modules.h>
 
 #ifndef WITHOUT_LIBLTDL
-#include "ltdl.h"
+#ifdef WITH_SYSTEM_LTDL
+#include <ltdl.h>
+#else
+#include "libltdl/ltdl.h"
+#endif
 #endif
 
 #ifdef __cplusplus
@@ -54,7 +58,8 @@ typedef struct module_instance_t {
 	pthread_mutex_t		*mutex;
 #endif
 	CONF_SECTION		*cs;
-	int			dead;
+	int			force;
+	int			code;
 	fr_module_hup_t	       	*mh;
 } module_instance_t;
 

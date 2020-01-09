@@ -1,4 +1,5 @@
 # -*- text -*-
+# Copyright (C) 2011 The FreeRADIUS Server project and contributors
 ##############################################################################
 #
 #	Siemens
@@ -21,6 +22,5 @@ ATTRIBUTE	Siemens-Policy-Name			7	string
 ATTRIBUTE	Siemens-Topology-Name			8	string
 ATTRIBUTE	Siemens-Ingress-RC-Name			9	string
 ATTRIBUTE	Siemens-Egress-RC-Name			10	string
-
 
 END-VENDOR	Siemens

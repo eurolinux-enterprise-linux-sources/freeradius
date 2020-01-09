@@ -1,4 +1,5 @@
 # -*- text -*-
+# Copyright (C) 2011 The FreeRADIUS Server project and contributors
 ##############################################################################
 #
 #	Nokia dictionary for attributes that conflict with other dictionaries.
@@ -20,7 +21,6 @@
 
 ATTRIBUTE	Nokia-Primary-DNS-Server		135	ipaddr
 ATTRIBUTE	Nokia-Secondary-DNS-Server		136	ipaddr
-
 
 ATTRIBUTE	Nokia-IMSI				224	octets
 ATTRIBUTE	Nokia-Charging-Id			225	integer

@@ -52,6 +52,8 @@ dh:
 #
 ######################################################################
 ca.key ca.pem: ca.cnf
+	@[ -f index.txt ] || $(MAKE) index.txt
+	@[ -f serial ] || $(MAKE) serial
 	openssl req -new -x509 -keyout ca.key -out ca.pem \
 		-days $(CA_DEFAULT_DAYS) -config ./ca.cnf
 
@@ -81,8 +83,7 @@ server.vrfy: ca.pem
 
 ######################################################################
 #
-#  Create a new client certificate, signed by the the above server
-#  certificate.
+#  Create a new client certificate, signed by the the above CA
 #
 ######################################################################
 client.csr client.key: client.cnf
@@ -99,7 +100,7 @@ client.pem: client.p12
 	cp client.pem $(USER_NAME).pem
 
 .PHONY: client.vrfy
-client.vrfy: server.pem client.pem 
+client.vrfy: ca.pem client.pem 
 	c_rehash .
 	openssl verify -CApath . client.pem
 

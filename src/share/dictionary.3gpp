@@ -1,4 +1,5 @@
 # -*- text -*-
+# Copyright (C) 2011 The FreeRADIUS Server project and contributors
 #
 #	3GPP stuff.
 #
@@ -42,12 +43,19 @@ ATTRIBUTE	3GPP-Teardown-Indicator			19	byte
 ATTRIBUTE	3GPP-IMEISV				20	string
 ATTRIBUTE	3GPP-RAT-Type				21	byte
 ATTRIBUTE	3GPP-Location-Info			22	octets
-ATTRIBUTE	3GPP-MS-Time-Zone			23	integer
+ATTRIBUTE	3GPP-MS-Time-Zone			23	octets
 ATTRIBUTE	3GPP-Camel-Charging-Info		24	octets
 ATTRIBUTE	3GPP-Packet-Filter			25	octets
 ATTRIBUTE	3GPP-Negotiated-DSCP			26	byte
 ATTRIBUTE	3GPP-Allocate-IP-Type			27	byte
 
+VALUE	3GPP-RAT-Type			UTRAN			1
+VALUE	3GPP-RAT-TYPE			GERAN			2
+VALUE	3GPP-RAT-TYPE			WLAN			3
+VALUE	3GPP-RAT-TYPE			GAN			4
+VALUE	3GPP-RAT-TYPE			HSPA-Evolution		5
+VALUE	3GPP-RAT-TYPE			EUTRAN			6
+VALUE	3GPP-RAT-TYPE			Virtual			7
 VALUE	3GPP-RAT-Type			IEEE-802.16e		101
 VALUE	3GPP-RAT-Type			3GPP2-eHRPD		102
 VALUE	3GPP-RAT-Type			3GPP2-HRPD		103

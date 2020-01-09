@@ -420,8 +420,8 @@ static int process_reply(EAP_HANDLER *handler, tls_session_t *tls_session,
 	peap_tunnel_t *t = tls_session->opaque;
 
 	if ((debug_flag > 0) && fr_log_fp) {
-		RDEBUG("Got tunneled reply RADIUS code %d",
-		       reply->code);
+		RDEBUG("Got tunneled reply RADIUS code %s",
+		       fr_packet_codes[reply->code]);
 
 		debug_pair_list(reply->vps);
 	}
@@ -592,8 +592,8 @@ static int eappeap_postproxy(EAP_HANDLER *handler, void *data)
 		if ((debug_flag > 0) && fr_log_fp) {
 			fprintf(fr_log_fp, "} # server %s\n", fake->server);
 			
-			RDEBUG("Final reply from tunneled session code %d",
-			       fake->reply->code);
+			RDEBUG("Final reply from tunneled session code %s",
+			       fr_packet_codes[fake->reply->code]);
 		
 			debug_pair_list(fake->reply->vps);
 		}
@@ -824,7 +824,7 @@ int eappeap_process(EAP_HANDLER *handler, tls_session_t *tls_session)
 		RDEBUG("Processing SoH request");
 		debug_pair_list(fake->packet->vps);
 		RDEBUG("server %s {", fake->server);
-		rad_authenticate(fake);
+		rad_virtual_server(fake);
 		RDEBUG("} # server %s", fake->server);
 		RDEBUG("Got SoH reply");
 		debug_pair_list(fake->reply->vps);
@@ -933,7 +933,9 @@ int eappeap_process(EAP_HANDLER *handler, tls_session_t *tls_session)
 		vp->vp_octets[3] = len & 0xff;
 		vp->vp_octets[4] = PW_EAP_IDENTITY;
 
-		memcpy(vp->vp_octets + EAP_HEADER_LEN + 1, t->username->vp_strvalue, t->username->length);
+		if (len > sizeof(vp->vp_octets)) len = sizeof(vp->vp_octets);
+		memcpy(vp->vp_octets + EAP_HEADER_LEN + 1,
+		       t->username->vp_strvalue, len - EAP_HEADER_LEN - 1);
 		vp->length = len;
 
 		pairadd(&fake->packet->vps, vp);
@@ -1023,7 +1025,7 @@ int eappeap_process(EAP_HANDLER *handler, tls_session_t *tls_session)
 	 *	Call authentication recursively, which will
 	 *	do PAP, CHAP, MS-CHAP, etc.
 	 */
-	rad_authenticate(fake);
+	rad_virtual_server(fake);
 
 	/*
 	 *	Note that we don't do *anything* with the reply

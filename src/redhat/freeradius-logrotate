@@ -30,14 +30,9 @@
 	create
 	missingok
 	compress
-}
-
-/var/log/radius/radutmp {
-	monthly
-	rotate 4
-	create
-	compress
-	missingok
+	postrotate
+		/sbin/service radiusd reload
+	endscript
 }
 
 /var/log/radius/radwtmp {
@@ -54,7 +49,3 @@
         compress
         missingok
 }
-
-lastrotate
-	kill -HUP `cat /var/run/radiusd/radiusd.pid`
-endscript

@@ -6,6 +6,12 @@
 *.la
 *.so
 *.lai
+*.bz2
+*.gz
+*.sig
+*.orig
+*.rej
+*.dSYM
 .libs
 .depends
 config.log
@@ -17,3 +23,6 @@ src/include/build-radpaths-h
 src/include/radpaths.h
 src/include/stamp-h
 autom4te.cache
+
+config.cache
+/libltdl/Makefile

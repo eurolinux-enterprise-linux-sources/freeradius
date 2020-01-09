@@ -1,7 +1,7 @@
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
-Version: 2.1.12
-Release: 6%{?dist}
+Version: 2.2.6
+Release: 4%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
 URL: http://www.freeradius.org/
@@ -13,17 +13,31 @@ Source103: freeradius-pam-conf
 
 Patch1: freeradius-cert-config.patch
 Patch2: freeradius-radtest.patch
-Patch3: freeradius-man.patch
-Patch4: freeradius-unix-passwd-expire.patch
-Patch5: freeradius-radeapclient-ipv6.patch
-Patch6: freeradius-postgres-sql.patch
-Patch7: freeradius-perl.patch
-Patch8: freeradius-cve-2012-3547.patch
-Patch9: freeradius-response-window-us-0001.patch
-Patch10: freeradius-response-window-us-0002.patch
-Patch11: freeradius-response-window-us-0003.patch
-Patch12: freeradius-response-window-us-0004.patch
-Patch13: freeradius-response-window-us-0005.patch
+Patch3: freeradius-response-window-us-0001.patch
+Patch4: freeradius-response-window-us-0002.patch
+Patch5: freeradius-response-window-us-0003.patch
+Patch6: freeradius-response-window-us-0004.patch
+Patch7: freeradius-response-window-us-0005.patch
+Patch8: freeradius-Verify-start_servers-max_servers.patch
+Patch9: freeradius-rlm_pap-Account-for-terminating-zero.patch
+Patch10: freeradius-rlm_otp-Fix-key-size-calculation.patch
+Patch11: freeradius-xlat-Always-free-head.patch
+Patch12: freeradius-rlm_sql_log-Check-rad_mkdir-result.patch
+Patch13: freeradius-Return-positive-integers-from-each-radius_xlat.patch
+Patch14: freeradius-Check-radius_get_vp-return-value.patch
+Patch15: freeradius-Check-cf_item_parse-return-value.patch
+Patch16: freeradius-Initialize-child-count-in-modcall_recurse.patch
+Patch17: freeradius-Limit-log-level-string-when-building-message.patch
+Patch18: freeradius-Remove-two-unused-variable-declarations.patch
+Patch19: freeradius-Fix-two-pointer-signedness-warnings.patch
+Patch20: freeradius-dhcp-Use-correct-format-specifiers-in-a-message.patch
+Patch21: freeradius-event-Use-comparison-not-assignment-in-an-if.patch
+Patch22: freeradius-dhcpd-Verify-DICT_VALUE-exists-itself.patch
+Patch23: freeradius-dhcp-Remove-useless-variable-initializer.patch
+Patch24: freeradius-Don-t-dereference-NULL-cs-in-cf_item_parse.patch
+Patch25: freeradius-Add-disable-openssl-version-check-option.patch
+Patch26: freeradius-Move-OpenSSL-init-out-of-version-check.patch
+Patch27: freeradius-Comment-out-ippool-dhcp.conf-inclusion.patch
 
 Obsoletes: freeradius-devel
 Obsoletes: freeradius-libs
@@ -155,17 +169,31 @@ This plugin provides the unixODBC support for the FreeRADIUS server project.
 %setup -q -n freeradius-server-%{version}
 %patch1 -p1 -b .cert-config
 %patch2 -p1 -b .radtest
-%patch3 -p1 -b .man
-%patch4 -p1 -b unix-passwd-expire
-%patch5 -p1 -b radeapclient-ipv6
-%patch6 -p1 -b postgres-sql
-%patch7 -p1 -b perl
-%patch8 -p1 -b cve-2012-3547
+%patch3 -p1
+%patch4 -p1
+%patch5 -p1
+%patch6 -p1
+%patch7 -p1
+%patch8 -p1
 %patch9 -p1
 %patch10 -p1
 %patch11 -p1
 %patch12 -p1
 %patch13 -p1
+%patch14 -p1
+%patch15 -p1
+%patch16 -p1
+%patch17 -p1
+%patch18 -p1
+%patch19 -p1
+%patch20 -p1
+%patch21 -p1
+%patch22 -p1
+%patch23 -p1
+%patch24 -p1
+%patch25 -p1
+%patch26 -p1
+%patch27 -p1
 
 # Some source files mistakenly have execute permissions set
 find $RPM_BUILD_DIR/freeradius-server-%{version} \( -name '*.c' -o -name '*.h' \) -a -perm /0111 -exec chmod a-x {} +
@@ -179,7 +207,9 @@ export CFLAGS="$RPM_OPT_FLAGS -fpic"
 
 %configure \
         --libdir=%{_libdir}/freeradius \
+        --disable-openssl-version-check \
         --with-system-libtool \
+        --with-system-libltdl \
         --disable-ltdl-install \
         --with-udpfromto \
         --with-gnu-ld \
@@ -245,7 +275,7 @@ rm -rf $RPM_BUILD_ROOT/%{_includedir}
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/experimental.conf
 
 # install doc files omitted by standard install
-for f in COPYRIGHT CREDITS INSTALL README; do
+for f in COPYRIGHT CREDITS INSTALL README.rst; do
     cp $f $RPM_BUILD_ROOT/%{docdir}
 done
 cp LICENSE $RPM_BUILD_ROOT/%{docdir}/LICENSE.gpl
@@ -309,6 +339,7 @@ exit 0
 # configs
 %dir %attr(755,root,radiusd) /etc/raddb
 %defattr(-,root,radiusd)
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/panic.gdb
 %attr(644,root,radiusd) %config(noreplace) /etc/raddb/dictionary
 %config(noreplace) /etc/raddb/acct_users
 %config(noreplace) /etc/raddb/attrs
@@ -347,6 +378,7 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/always
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/attr_filter
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/attr_rewrite
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/cache
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/chap
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/checkval
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/counter
@@ -354,6 +386,7 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/detail
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/detail.example.com
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/detail.log
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/dhcp_sqlippool
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/digest
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/dynamic_clients
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/echo
@@ -378,6 +411,7 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/passwd
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/policy
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/preprocess
+%attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/radrelay
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/radutmp
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/realm
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/modules/redis
@@ -457,6 +491,8 @@ exit 0
 %{_libdir}/freeradius/rlm_chap-%{version}.so
 %{_libdir}/freeradius/rlm_checkval.so
 %{_libdir}/freeradius/rlm_checkval-%{version}.so
+%{_libdir}/freeradius/rlm_cache.so
+%{_libdir}/freeradius/rlm_cache-%{version}.so
 %{_libdir}/freeradius/rlm_copy_packet.so
 %{_libdir}/freeradius/rlm_copy_packet-%{version}.so
 %{_libdir}/freeradius/rlm_counter.so
@@ -595,6 +631,37 @@ exit 0
 %{_libdir}/freeradius/rlm_sql_unixodbc-%{version}.so
 
 %changelog
+* Thu Feb 12 2015 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 2.2.6-4
+- Move OpenSSL init out of version check
+  Resolves: Bug#1189394 radiusd segfaults after update
+- Comment-out ippool-dhcp.conf inclusion
+  Resolves: Bug#1189386 radiusd fails to start after 'clean' installation
+
+* Wed Feb 04 2015 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 2.2.6-3
+- Disable OpenSSL version check
+  Resolves: Bug#1189011
+
+* Mon Feb 02 2015 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 2.2.6-2
+- Fix a number of new Coverity errors and compiler warnings.
+  Resolves: Bug#1188598
+
+* Tue Jan 27 2015 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 2.2.6-1
+- Upgrade to the latest upstream release v2.2.6
+  Resolves: Bug#921563  raddebug not working correctly
+  Resolves: Bug#921567  raddebug -t 0 exists immediately
+  Resolves: Bug#1060319 MSCHAP Authentication is not working using automatic
+                        windows user credentials
+  Resolves: Bug#1078736 Rebase FreeRADIUS to 2.2.4
+  Resolves: Bug#1135439 Default message digest defaults to sha1
+  Resolves: Bug#1142669 EAP-TLS and OCSP validation causing segmentation
+                        fault
+  Resolves: Bug#1173388 dictionary.mikrotik missing Attributes
+- Remove radutmp rotation
+  Resolves: Bug#904578  radutmp should not rotate
+- Check for start_servers not exceeding max_servers
+  Resolves: Bug#1146828 radiusd silently fails when start_servers is higher
+                        than max_servers
+
 * Sat Jul 19 2014 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 2.1.12-6
 - Fix missing braces around a condition branch in client response_window
   patch.

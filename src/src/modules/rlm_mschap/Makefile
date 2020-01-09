@@ -10,7 +10,7 @@ HEADERS		= mschap.h smbdes.h
 RLM_CFLAGS	=
 RLM_LDFLAGS	=
 RLM_LIBS	=
-RLM_UTILS   	= smbencrypt
+RLM_UTILS   	= smbencrypt$(EXEEXT)
 RLM_INSTALL 	= smbencrypt-install
 
 # over-ride the previous assignment if we're not building anything
@@ -18,8 +18,8 @@ include ../rules.mak
 
 $(LT_OBJS): $(HEADERS)
 
-smbencrypt: smbencrypt.lo smbdes.lo $(LIBRADIUS)
-	$(LIBTOOL) --mode=link $(CC) $(LDFLAGS) $(RLM_LDFLAGS) \
+smbencrypt$(EXEEXT): smbencrypt.lo smbdes.lo $(LIBRADIUS)
+	$(LIBTOOL) --mode=link --tag=CC $(CC) $(LDFLAGS) $(RLM_LDFLAGS) \
 		-o $@ $^ $(RLM_LIBS) $(LIBS)
 
 smbencrypt-install:

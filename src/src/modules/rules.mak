@@ -63,10 +63,10 @@ $(LT_OBJS): $(SERVER_HEADERS)
 #
 #######################################################################
 %.lo: %.c
-	$(LIBTOOL) --mode=compile $(CC) $(CFLAGS) $(RLM_CFLAGS) -c $<
+	$(LIBTOOL) --mode=compile --tag=CC $(CC) $(CFLAGS) $(RLM_CFLAGS) -c $<
 
 %.lo: %.cpp
-	$(LIBTOOL) --mode=compile $(CXX) $(CFLAGS) $(RLM_CFLAGS) -c $<
+	$(LIBTOOL) --mode=compile --tag=CXX $(CXX) $(CFLAGS) $(RLM_CFLAGS) -c $<
 
 ifneq ($(TARGET),)
 #######################################################################
@@ -113,15 +113,14 @@ endif
 WHERE=$(shell pwd)
 
 build-module: $(TARGET).la $(RLM_UTILS)
-	@[ "x$(RLM_SUBDIRS)" = "x" ] || $(MAKE) $(MFLAGS) WHAT_TO_MAKE=all common
 	@[ -d $(top_builddir)/src/modules/lib/.libs ] || mkdir $(top_builddir)/src/modules/lib/.libs
 	for x in .libs/* $^; do \
 		rm -rf $(top_builddir)/src/modules/lib/$$x; \
 		ln -s $(WHERE)/$$x $(top_builddir)/src/modules/lib/$$x; \
 	done
 
-$(TARGET).la: $(LT_OBJS)
-	$(LIBTOOL) --mode=link $(CC) -release $(RADIUSD_VERSION) \
+$(TARGET).la: $(RLM_SUBDIRS) $(LT_OBJS)
+	$(LIBTOOL) --mode=link --tag=CC $(CC) -release $(RADIUSD_VERSION_STRING) \
 	-module $(LINK_MODE) $(LDFLAGS) $(RLM_LDFLAGS) -o $@     \
 	-rpath $(libdir) $^ $(LIBRADIUS) $(RLM_LIBS) $(LIBS)
 
@@ -171,6 +170,6 @@ install:
 	if [ "x$(TARGET)" != "x" ]; then \
 	    $(LIBTOOL) --mode=install $(INSTALL) -c \
 		$(TARGET).la $(R)$(libdir)/$(TARGET).la || exit $$?; \
-	    rm -f $(R)$(libdir)/$(TARGET)-$(RADIUSD_VERSION).la; \
-	    ln -s $(TARGET).la $(R)$(libdir)/$(TARGET)-$(RADIUSD_VERSION).la || exit $$?; \
+	    rm -f $(R)$(libdir)/$(TARGET)-$(RADIUSD_VERSION_STRING).la; \
+	    ln -s $(TARGET).la $(R)$(libdir)/$(TARGET)-$(RADIUSD_VERSION_STRING).la || exit $$?; \
 	fi

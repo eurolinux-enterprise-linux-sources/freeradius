@@ -233,6 +233,12 @@
 #define PW_PACKET_TRANSMIT_COUNTER     	1134
 #define PW_CACHED_SESSION_POLICY     	1135
 
+#define PW_CACHE_TTL			1140
+#define PW_CACHE_STATUS_ONLY		1141
+#define PW_CACHE_ENTRY_HITS		1142
+
+#define PW_EAP_SESSION_ID		1146
+
 /*
  *	Integer Translations
  */

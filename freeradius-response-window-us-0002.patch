@@ -1,7 +1,7 @@
-From c40fac4fb32072f567f823e80b3124b7cc414000 Mon Sep 17 00:00:00 2001
+From 955f920861ce9b962cce31b85c3e47a5606162fd Mon Sep 17 00:00:00 2001
 From: Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com>
 Date: Mon, 14 Jul 2014 15:25:19 +0300
-Subject: [PATCH 2/5] Add init_delay mainconfig field
+Subject: [PATCH 1/1] Add init_delay mainconfig field
 
 Add init_delay - a struct timeval mainconfig field to be used for
 adjusting initial request processing delay.
@@ -12,22 +12,22 @@ adjusting initial request processing delay.
  3 files changed, 11 insertions(+), 2 deletions(-)
 
 diff --git a/src/include/radiusd.h b/src/include/radiusd.h
-index 2809100..1a9ae62 100644
+index 2bf5173..2eb7968 100644
 --- a/src/include/radiusd.h
 +++ b/src/include/radiusd.h
-@@ -380,6 +380,7 @@ typedef struct main_config_t {
- #ifdef WITH_POST_PROXY_AUTHORIZE
- 	int		post_proxy_authorize;
+@@ -383,6 +383,7 @@ typedef struct main_config_t {
  #endif
+ 	int		debug_memory;
+ 	const char	*panic_action;
 +	struct timeval  init_delay; /* initial request processing delay */
  } MAIN_CONFIG_T;
  
  #define DEBUG	if(debug_flag)log_debug
 diff --git a/src/main/event.c b/src/main/event.c
-index 5090747..23535d6 100644
+index c889bf2..c47b046 100644
 --- a/src/main/event.c
 +++ b/src/main/event.c
-@@ -2995,7 +2995,8 @@ int received_request(rad_listen_t *listener,
+@@ -3057,7 +3057,8 @@ int received_request(rad_listen_t *listener,
  	request->timestamp = request->received.tv_sec;
  	request->when = request->received;
  
@@ -37,7 +37,7 @@ index 5090747..23535d6 100644
  
  	tv_add(&request->when, request->delay);
  
-@@ -3227,7 +3228,8 @@ REQUEST *received_proxy_response(RADIUS_PACKET *packet)
+@@ -3289,7 +3290,8 @@ REQUEST *received_proxy_response(RADIUS_PACKET *packet)
  
  	request->child_state = REQUEST_QUEUED;
  	request->when = now;
@@ -48,10 +48,10 @@ index 5090747..23535d6 100644
  	tv_add(&request->when, request->delay);
  
 diff --git a/src/main/mainconfig.c b/src/main/mainconfig.c
-index bd406c1..6a21c77 100644
+index faf69fb..0db1b4b 100644
 --- a/src/main/mainconfig.c
 +++ b/src/main/mainconfig.c
-@@ -900,6 +900,12 @@ int read_mainconfig(int reload)
+@@ -920,6 +920,12 @@ int read_mainconfig(int reload)
  	cf_section_parse(cs, NULL, server_config);
  
  	/*
@@ -65,5 +65,5 @@ index bd406c1..6a21c77 100644
  	 *	with the new ones.
  	 *
 -- 
-2.0.1
+2.1.4
 

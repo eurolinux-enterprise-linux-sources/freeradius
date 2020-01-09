@@ -62,6 +62,10 @@ struct main_config_t mainconfig;
 char *request_log_file = NULL;
 char *debug_condition = NULL;
 
+#ifdef HAVE_GMTIME_R
+extern int log_dates_utc;
+#endif
+
 typedef struct cached_config_t {
 	struct cached_config_t *next;
 	time_t		created;
@@ -96,7 +100,11 @@ static const char *my_name = NULL;
 static const char *sbindir = NULL;
 static const char *run_dir = NULL;
 static char *syslog_facility = NULL;
-static const FR_NAME_NUMBER str2fac[] = {
+
+/*
+ *	Syslog facility table.
+ */
+const FR_NAME_NUMBER syslog_str2fac[] = {
 #ifdef LOG_KERN
 	{ "kern", LOG_KERN },
 #endif
@@ -164,6 +172,7 @@ static const CONF_PARSER security_config[] = {
 	{ "max_attributes",  PW_TYPE_INTEGER, 0, &fr_max_attributes, Stringify(0) },
 	{ "reject_delay",  PW_TYPE_INTEGER, 0, &mainconfig.reject_delay, Stringify(0) },
 	{ "status_server", PW_TYPE_BOOLEAN, 0, &mainconfig.status_server, "no"},
+	{ "allow_vulnerable_openssl", PW_TYPE_BOOLEAN, 0, &mainconfig.allow_vulnerable_openssl, "no"},
 	{ NULL, -1, 0, NULL, NULL }
 };
 
@@ -185,6 +194,9 @@ static const CONF_PARSER serverdest_config[] = {
 	{ "log", PW_TYPE_SUBSECTION, 0, NULL, (const void *) logdest_config },
 	{ "log_file", PW_TYPE_STRING_PTR, 0, &mainconfig.log_file, NULL },
 	{ "log_destination", PW_TYPE_STRING_PTR, 0, &radlog_dest, NULL },
+#ifdef HAVE_GMTIME_R
+	{ "use_utc", PW_TYPE_BOOLEAN, 0, &log_dates_utc, NULL },
+#endif
 	{ NULL, -1, 0, NULL, NULL }
 };
 
@@ -197,6 +209,10 @@ static const CONF_PARSER log_config_nodest[] = {
 	{ "auth_goodpass", PW_TYPE_BOOLEAN, 0, &mainconfig.log_auth_goodpass, "no" },
 	{ "msg_badpass", PW_TYPE_STRING_PTR, 0, &mainconfig.auth_badpass_msg, NULL},
 	{ "msg_goodpass", PW_TYPE_STRING_PTR, 0, &mainconfig.auth_goodpass_msg, NULL},
+
+#ifdef HAVE_GMTIME_R
+	{ "use_utc", PW_TYPE_BOOLEAN, 0, &log_dates_utc, NULL },
+#endif
 
 	{ NULL, -1, 0, NULL, NULL }
 };
@@ -221,6 +237,7 @@ static const CONF_PARSER server_config[] = {
 	{ "run_dir",            PW_TYPE_STRING_PTR, 0, &run_dir,           "${localstatedir}/run/${name}"},
 	{ "libdir",             PW_TYPE_STRING_PTR, 0, &radlib_dir,        "${prefix}/lib"},
 	{ "radacctdir",         PW_TYPE_STRING_PTR, 0, &radacct_dir,       "${logdir}/radacct" },
+	{ "panic_action",	PW_TYPE_STRING_PTR, 0, &mainconfig.panic_action, NULL},
 	{ "hostname_lookups",   PW_TYPE_BOOLEAN,    0, &fr_dns_lookups,      "no" },
 	{ "max_request_time", PW_TYPE_INTEGER, 0, &mainconfig.max_request_time, Stringify(MAX_REQUEST_TIME) },
 	{ "cleanup_delay", PW_TYPE_INTEGER, 0, &mainconfig.cleanup_delay, Stringify(CLEANUP_DELAY) },
@@ -362,10 +379,13 @@ static size_t xlat_config(void *instance, REQUEST *request,
 	 *  If 'outlen' is too small, then the output is chopped to fit.
 	 */
 	value = cf_pair_value(cp);
-	if (value) {
-		if (outlen > strlen(value)) {
-			outlen = strlen(value) + 1;
-		}
+	if (!value) {
+		out[0] = '\0';
+		return 0;
+	}
+
+	if (outlen > strlen(value)) {
+		outlen = strlen(value) + 1;
 	}
 
 	return func(out, outlen, value);
@@ -395,7 +415,7 @@ static size_t xlat_client(UNUSED void *instance, REQUEST *request,
 		*out = '\0';
 		return 0;
 	}
-	
+
 	strlcpy(out, value, outlen);
 
 	return strlen(out);
@@ -446,7 +466,7 @@ static void fr_set_dumpable(void)
 
 		no_core.rlim_cur = 0;
 		no_core.rlim_max = 0;
-		
+
 		if (setrlimit(RLIMIT_CORE, &no_core) < 0) {
 			radlog(L_ERR, "Failed disabling core dumps: %s",
 			       strerror(errno));
@@ -485,7 +505,7 @@ static int doing_setuid = FALSE;
 void fr_suid_up(void)
 {
 	uid_t ruid, euid, suid;
-	
+
 	if (getresuid(&ruid, &euid, &suid) < 0) {
 		radlog(L_ERR, "Failed getting saved UID's");
 		_exit(1);
@@ -511,7 +531,7 @@ void fr_suid_down(void)
 			progname, uid_name, strerror(errno));
 		_exit(1);
 	}
-		
+
 	if (geteuid() != server_uid) {
 		fprintf(stderr, "%s: Failed switching uid: UID is incorrect\n",
 			progname);
@@ -575,7 +595,7 @@ void fr_suid_down_permanent(void)
 	fr_set_dumpable();
 }
 #endif /* HAVE_SETUID */
- 
+
 #ifdef HAVE_SETUID
 
 /*
@@ -630,7 +650,7 @@ static int switch_users(CONF_SECTION *cs)
 	/*  Set UID.  */
 	if (uid_name) {
 		struct passwd *pw;
-		
+
 		pw = getpwnam(uid_name);
 		if (pw == NULL) {
 			fprintf(stderr, "%s: Cannot get passwd entry for user %s: %s\n",
@@ -706,14 +726,14 @@ static int switch_users(CONF_SECTION *cs)
 				fprintf(stderr, "radiusd: Failed to open log file %s: %s\n", mainconfig.log_file, strerror(errno));
 				return 0;
 			}
-		
+
 			if (chown(mainconfig.log_file, server_uid, server_gid) < 0) {
-				fprintf(stderr, "%s: Cannot change ownership of log file %s: %s\n", 
+				fprintf(stderr, "%s: Cannot change ownership of log file %s: %s\n",
 					progname, mainconfig.log_file, strerror(errno));
 				return 0;
 			}
 		}
-	}		
+	}
 
 	if (uid_name) {
 		doing_setuid = TRUE;
@@ -794,7 +814,7 @@ int read_mainconfig(int reload)
 	snprintf(buffer, sizeof(buffer), "%.200s/%.50s.conf",
 		 radius_dir, mainconfig.name);
 	if ((cs = cf_file_read(buffer)) == NULL) {
-		radlog(L_ERR, "Errors reading %s", buffer);
+		radlog(L_ERR, "Errors reading or parsing %s", buffer);
 		return -1;
 	}
 
@@ -808,13 +828,13 @@ int read_mainconfig(int reload)
 			cf_section_free(&cs);
 			return -1;
 		}
-		
+
 		if (!radlog_dest) {
 			fprintf(stderr, "radiusd: Error: No log destination specified.\n");
 			cf_section_free(&cs);
 			return -1;
 		}
-		
+
 		mainconfig.radlog_dest = fr_str2int(str2dest, radlog_dest,
 						    RADLOG_NUM_DEST);
 		if (mainconfig.radlog_dest == RADLOG_NUM_DEST) {
@@ -823,7 +843,7 @@ int read_mainconfig(int reload)
 			cf_section_free(&cs);
 			return -1;
 		}
-		
+
 		if (mainconfig.radlog_dest == RADLOG_SYSLOG) {
 			/*
 			 *	Make sure syslog_facility isn't NULL
@@ -834,7 +854,7 @@ int read_mainconfig(int reload)
 				cf_section_free(&cs);
 				return -1;
 			}
-			mainconfig.syslog_facility = fr_str2int(str2fac, syslog_facility, -1);
+			mainconfig.syslog_facility = fr_str2int(syslog_str2fac, syslog_facility, -1);
 			if (mainconfig.syslog_facility < 0) {
 				fprintf(stderr, "radiusd: Error: Unknown syslog_facility %s\n",
 					syslog_facility);
@@ -911,11 +931,13 @@ int read_mainconfig(int reload)
 
 	DEBUG2("%s: #### Loading Realms and Home Servers ####", mainconfig.name);
 	if (!realms_init(cs)) {
+		DEBUG2("Failed to load realms and home servers\n");
 		return -1;
 	}
 
 	DEBUG2("%s: #### Loading Clients ####", mainconfig.name);
 	if (!clients_parse_section(cs)) {
+		DEBUG2("Failed to load clients\n");
 		return -1;
 	}
 
@@ -948,11 +970,6 @@ int read_mainconfig(int reload)
 		mainconfig.reject_delay = mainconfig.cleanup_delay;
 	}
 	if (mainconfig.reject_delay < 0) mainconfig.reject_delay = 0;
-
-	/*  Reload the modules.  */
-	if (setup_modules(reload, mainconfig.config) < 0) {
-		return -1;
-	}
 
 	if (chroot_dir) {
 		if (chdir(radlog_dir) < 0) {
@@ -1001,6 +1018,29 @@ int free_mainconfig(void)
 	return 0;
 }
 
+void hup_logfile(void)
+{
+		int fd, old_fd;
+
+		if (mainconfig.radlog_dest != RADLOG_FILES) return;
+
+ 		fd = open(mainconfig.log_file,
+			  O_WRONLY | O_APPEND | O_CREAT, 0640);
+		if (fd >= 0) {
+			/*
+			 *	Atomic swap. We'd like to keep the old
+			 *	FD around so that callers don't
+			 *	suddenly find the FD closed, and the
+			 *	writes go nowhere.  But that's hard to
+			 *	do.  So... we have the case where a
+			 *	log message *might* be lost on HUP.
+			 */
+			old_fd = mainconfig.radlog_fd;
+			mainconfig.radlog_fd = fd;
+			close(old_fd);
+		}
+}
+
 void hup_mainconfig(void)
 {
 	cached_config_t *cc;
@@ -1013,7 +1053,7 @@ void hup_mainconfig(void)
 	snprintf(buffer, sizeof(buffer), "%.200s/%.50s.conf",
 		 radius_dir, mainconfig.name);
 	if ((cs = cf_file_read(buffer)) == NULL) {
-		radlog(L_ERR, "Failed to re-read %s", buffer);
+		radlog(L_ERR, "Failed to re-read or parse %s", buffer);
 		return;
 	}
 
@@ -1041,25 +1081,7 @@ void hup_mainconfig(void)
 	 *	The "open log file" code is here rather than in log.c,
 	 *	because it makes that function MUCH simpler.
 	 */
-	if (mainconfig.radlog_dest == RADLOG_FILES) {
-		int fd, old_fd;
-		
-		fd = open(mainconfig.log_file,
-			  O_WRONLY | O_APPEND | O_CREAT, 0640);
-		if (fd >= 0) {
-			/*
-			 *	Atomic swap. We'd like to keep the old
-			 *	FD around so that callers don't
-			 *	suddenly find the FD closed, and the
-			 *	writes go nowhere.  But that's hard to
-			 *	do.  So... we have the case where a
-			 *	log message *might* be lost on HUP.
-			 */
-			old_fd = mainconfig.radlog_fd;
-			mainconfig.radlog_fd = fd;
-			close(old_fd);
-		}
-	}
+	hup_logfile();
 
 	radlog(L_INFO, "HUP - loading modules");
 

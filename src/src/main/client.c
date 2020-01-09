@@ -63,6 +63,8 @@ static fr_fifo_t	*deleted_clients = NULL;
  */
 void client_free(RADCLIENT *client)
 {
+	if (!client) return;
+
 #ifdef WITH_DYNAMIC_CLIENTS
 	if (client->dynamic == 2) {
 		time_t now;
@@ -270,17 +272,51 @@ int client_add(RADCLIENT_LIST *clients, RADCLIENT *client)
 	}
 
 	/*
-	 *	If "clients" is NULL, it means add to the global list.
+	 *	If "clients" is NULL, it means add to the global list,
+	 *	unless we're trying to add it to a virtual server...
 	 */
 	if (!clients) {
-		/*
-		 *	Initialize it, if not done already.
-		 */
-		if (!root_clients) {
-			root_clients = clients_init();
-			if (!root_clients) return 0;
+		if (client->server != NULL) {
+			CONF_SECTION *cs;
+
+			cs = cf_section_sub_find_name2(mainconfig.config,
+						       "server", client->server);
+			if (!cs) {
+				radlog(L_ERR, "Failed to find virtual server %s",
+				       client->server);
+				return 0;
+			}
+
+			/*
+			 *	If the client list already exists, use that.
+			 *	Otherwise, create a new client list.
+			 */
+			clients = cf_data_find(cs, "clients");
+			if (!clients) {
+				clients = clients_init();
+				if (!clients) {
+					radlog(L_ERR, "Out of memory");
+					return 0;
+				}
+
+				if (cf_data_add(cs, "clients", clients, (void *) clients_free) < 0) {
+					radlog(L_ERR, "Failed to associate clients with virtual server %s",
+					       client->server);
+					clients_free(clients);
+					return 0;
+				}
+			}
+
+		} else {
+			/*
+			 *	Initialize the global list, if not done already.
+			 */
+			if (!root_clients) {
+				root_clients = clients_init();
+				if (!root_clients) return 0;
+			}
+			clients = root_clients;
 		}
-		clients = root_clients;
 	}
 
 	if ((client->prefix < 0) || (client->prefix > 128)) {
@@ -746,8 +782,8 @@ static RADCLIENT *client_parse(CONF_SECTION *cs, int in_server)
 							   HOME_TYPE_COA);
 		}
 		if (!c->coa_pool && !c->coa_server) {
-			client_free(c);
 			cf_log_err(cf_sectiontoitem(cs), "No such home_server or home_server_pool \"%s\"", c->coa_name);
+			client_free(c);
 			return NULL;
 		}
 	}
@@ -874,6 +910,7 @@ RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section)
 					cf_log_err(cf_sectiontoitem(cs),
 						   "Failed reading client file \"%s\"", buf2);
 					client_free(c);
+					closedir(dir);
 					return NULL;
 				}
 
@@ -883,9 +920,11 @@ RADCLIENT_LIST *clients_parse_section(CONF_SECTION *section)
 				if (!client_validate(clients, c, dc)) {
 					
 					client_free(c);
+					closedir(dir);
 					return NULL;
 				}
 			} /* loop over the directory */
+			closedir(dir);
 		}
 #endif /* HAVE_DIRENT_H */
 #endif /* WITH_DYNAMIC_CLIENTS */
@@ -1089,6 +1128,13 @@ RADCLIENT *client_create(RADCLIENT_LIST *clients, REQUEST *request)
 		goto error;
 	}
 
+	if (!c->secret || !*c->secret) {
+		DEBUG("- Cannot add client %s: No secret was specified.",
+		      ip_ntoh(&request->packet->src_ipaddr,
+			      buffer, sizeof(buffer)));
+		goto error;
+	}
+
 	if (!client_validate(clients, request->client, c)) {
 		return NULL;
 	}
@@ -1110,8 +1156,15 @@ RADCLIENT *client_read(const char *filename, int in_server, int flag)
 
 	cs = cf_file_read(filename);
 	if (!cs) return NULL;
+	
+	cs = cf_section_sub_find(cs, "client");
+	if (!cs) {
+		radlog(L_ERR, "No \"client\" section found in client file");
+		return NULL;
+	}
 
-	c = client_parse(cf_section_sub_find(cs, "client"), in_server);
+	c = client_parse(cs, in_server);
+	if (!c) return NULL;
 
 	p = strrchr(filename, FR_DIR_SEP);
 	if (p) {
@@ -1131,8 +1184,6 @@ RADCLIENT *client_read(const char *filename, int in_server, int flag)
 		client_free(c);
 		return NULL;
 	}
-
-
 
 	return c;
 }

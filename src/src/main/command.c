@@ -175,6 +175,7 @@ static int fr_server_domain_socket(const char *path)
 		if (errno != ENOENT) {
 			radlog(L_ERR, "Failed to stat %s: %s",
 			       path, strerror(errno));
+			close(sockfd);
 			return -1;
 		}
 
@@ -188,6 +189,7 @@ static int fr_server_domain_socket(const char *path)
 #endif
 			) {
 			radlog(L_ERR, "Cannot turn %s into socket", path);
+			close(sockfd);
 			return -1;		       
 		}
 
@@ -196,12 +198,14 @@ static int fr_server_domain_socket(const char *path)
 		 */
 		if (buf.st_uid != geteuid()) {
 			radlog(L_ERR, "We do not own %s", path);
+			close(sockfd);
 			return -1;
 		}
 
 		if (unlink(path) < 0) {
 			radlog(L_ERR, "Failed to delete %s: %s",
 			       path, strerror(errno));
+			close(sockfd);
 			return -1;
 		}
 	}
@@ -301,6 +305,14 @@ static int command_hup(rad_listen_t *listener, int argc, char *argv[])
 		return 1;
 	}
 
+	/*
+	 *	Hack a "main" HUP thingy
+	 */
+	if (strcmp(argv[0], "main.log") == 0) {
+		hup_logfile();
+		return 1;
+	}
+
 	cs = cf_section_find("modules");
 	if (!cs) return 0;
 
@@ -341,6 +353,31 @@ static int command_uptime(rad_listen_t *listener,
 
 	CTIME_R(&fr_start_time, buffer, sizeof(buffer));
 	cprintf(listener, "Up since %s", buffer); /* no \r\n */
+
+	return 1;		/* success */
+}
+
+static int command_show_config(rad_listen_t *listener, int argc, char *argv[])
+{
+	CONF_ITEM *ci;
+	CONF_PAIR *cp;
+	const char *value;
+
+	if (argc != 1) {
+		cprintf(listener, "ERROR: No path was given\n");
+		return 0;
+	}
+
+	ci = cf_reference_item(mainconfig.config, mainconfig.config, argv[0]);
+	if (!ci) return 0;
+
+	if (!cf_item_is_pair(ci)) return 0;
+
+	cp = cf_itemtopair(ci);
+	value = cf_pair_value(cp);
+	if (!value) return 0;
+
+	cprintf(listener, "%s\n", value);
 
 	return 1;		/* success */
 }
@@ -542,6 +579,39 @@ static int command_show_module_flags(rad_listen_t *listener, int argc, char *arg
 	return 1;		/* success */
 }
 
+extern const FR_NAME_NUMBER mod_rcode_table[];
+
+
+static int command_show_module_status(rad_listen_t *listener, int argc, char *argv[])
+{
+	CONF_SECTION *cs;
+	const module_instance_t *mi;
+	const module_t *mod;
+
+	if (argc != 1) {
+		cprintf(listener, "ERROR: No module name was given\n");
+		return 0;
+	}
+
+	cs = cf_section_find("modules");
+	if (!cs) return 0;
+
+	mi = find_module_instance(cs, argv[0], 0);
+	if (!mi) {
+		cprintf(listener, "ERROR: No such module \"%s\"\n", argv[0]);
+		return 0;
+	}
+
+	if (mi->force == FALSE) {
+		cprintf(listener, "alive\n");
+	} else {
+		cprintf(listener, "%s\n", fr_int2str(mod_rcode_table, mi->code, "<invalid>"));
+	}
+
+	
+	return 1;		/* success */
+}
+
 
 /*
  *	Show all loaded modules
@@ -661,12 +731,14 @@ static int command_show_xml(rad_listen_t *listener, UNUSED int argc, UNUSED char
 
 	if (argc == 0) {
 		cprintf(listener, "ERROR: <reference> is required\n");
+		fclose(fp);
 		return 0;
 	}
 	
 	ci = cf_reference_item(mainconfig.config, mainconfig.config, argv[0]);
 	if (!ci) {
 		cprintf(listener, "ERROR: No such item <reference>\n");
+		fclose(fp);
 		return 0;
 	}
 
@@ -1303,6 +1375,9 @@ static fr_command_table_t command_table_show_module[] = {
 	{ "methods", FR_READ,
 	  "show module methods <module> - show sections where <module> may be used",
 	  command_show_module_methods, NULL },
+	{ "status", FR_READ,
+	  "show module status <module> - show the module status",
+	  command_show_module_status, NULL },
 
 	{ NULL, 0, NULL, NULL, NULL }
 };
@@ -1339,6 +1414,9 @@ static fr_command_table_t command_table_show[] = {
 	{ "client", FR_READ,
 	  "show client <command> - do sub-command of client",
 	  NULL, command_table_show_client },
+	{ "config", FR_READ,
+	  "show config <path> - shows the value of configuration option <path>",
+	  command_show_config, NULL },
 	{ "debug", FR_READ,
 	  "show debug <command> - show debug properties",
 	  NULL, command_table_show_debug },
@@ -1451,6 +1529,8 @@ static int command_set_module_config(rad_listen_t *listener, int argc, char *arg
 	return 1;		/* success */
 }
 
+extern const FR_NAME_NUMBER mod_rcode_table[];
+
 static int command_set_module_status(rad_listen_t *listener, int argc, char *argv[])
 {
 	CONF_SECTION *cs;
@@ -1472,14 +1552,23 @@ static int command_set_module_status(rad_listen_t *listener, int argc, char *arg
 
 
 	if (strcmp(argv[1], "alive") == 0) {
-		mi->dead = FALSE;
+		mi->force = FALSE;
 
 	} else if (strcmp(argv[1], "dead") == 0) {
-		mi->dead = TRUE;
+		mi->code = RLM_MODULE_FAIL;
+		mi->force = TRUE;
 
 	} else {
-		cprintf(listener, "ERROR: Unknown status \"%s\"\n", argv[2]);
-		return 0;
+		int rcode;
+
+		rcode = fr_str2int(mod_rcode_table, argv[1], -1);
+		if (rcode < 0) {
+			cprintf(listener, "ERROR: Unknown status \"%s\"\n", argv[1]);
+			return 0;
+		}
+
+		mi->code = rcode;
+		mi->force = TRUE;
 	}
 
 	return 1;		/* success */
@@ -1503,7 +1592,7 @@ static int command_print_stats(rad_listen_t *listener, fr_stats_t *stats,
 	cprintf(listener, "\tdup\t\t%u\n", stats->total_dup_requests);
 	cprintf(listener, "\tinvalid\t\t%u\n", stats->total_invalid_requests);
 	cprintf(listener, "\tmalformed\t%u\n", stats->total_malformed_requests);
-	cprintf(listener, "\tbad_signature\t%u\n", stats->total_bad_authenticators);
+	cprintf(listener, "\tbad_authenticator\t%u\n", stats->total_bad_authenticators);
 	cprintf(listener, "\tdropped\t\t%u\n", stats->total_packets_dropped);
 	cprintf(listener, "\tunknown_types\t%u\n", stats->total_unknown_types);
 	
@@ -1544,6 +1633,11 @@ static int command_stats_detail(rad_listen_t *listener, int argc, char *argv[])
 		if (strcmp(argv[1], data->filename) != 0) continue;
 
 		break;
+	}
+
+	if (!data) {
+		cprintf(listener, "ERROR: No detail file listener\n");
+		return 0;
 	}
 
 	cprintf(listener, "\tstate\t%s\n",
@@ -1776,7 +1870,7 @@ static fr_command_table_t command_table_set_module[] = {
 	  command_set_module_config, NULL },
 
 	{ "status", FR_WRITE,
-	  "set module status [alive|dead] - set the module to be alive or dead (always return \"fail\")",
+	  "set module status <module> [alive|...] - set the module status to be alive (operating normally), or force a particular code (ok,fail, etc.)",
 	  command_set_module_status, NULL },
 
 	{ NULL, 0, NULL, NULL, NULL }
@@ -1846,6 +1940,8 @@ static void command_socket_free(rad_listen_t *this)
 {
 	fr_command_socket_t *sock = this->data;
 
+	if (!sock->copy) return;
+
 	unlink(sock->copy);
 	free(sock->copy);
 	sock->copy = NULL;
@@ -1869,8 +1965,12 @@ static int command_socket_parse(CONF_SECTION *cs, rad_listen_t *this)
 		return -1;
 	}
 
-	sock->copy = NULL;
-	if (sock->path) sock->copy = strdup(sock->path);
+	if (!sock->path) {
+		radlog(L_ERR, "Socket name is requird");
+		return -1;
+	}
+
+	sock->copy = strdup(sock->path);
 
 #if defined(HAVE_GETPEEREID) || defined (SO_PEERCRED)
 	if (sock->uid_name) {

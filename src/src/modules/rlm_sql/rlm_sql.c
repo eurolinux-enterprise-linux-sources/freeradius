@@ -429,6 +429,24 @@ static size_t sql_escape_func(char *out, size_t outlen, const char *in)
 	size_t len = 0;
 
 	while (in[0]) {
+		size_t utf8_len;
+
+		/*
+		 *	Allow all multi-byte UTF8 characters.
+		 */
+		utf8_len = fr_utf8_char((uint8_t const *) in);
+		if (utf8_len > 1) {
+			if (outlen <= utf8_len) break;
+
+			memcpy(out, in, utf8_len);
+			in += utf8_len;
+			out += utf8_len;
+
+			outlen -= utf8_len;
+			len += utf8_len;
+			continue;
+		}
+
 		/*
 		 *	Non-printable characters get replaced with their
 		 *	mime-encoded equivalents.
@@ -810,40 +828,16 @@ static int rlm_sql_detach(void *instance)
 		}
 
 		if (inst->config->xlat_name) {
-			xlat_unregister(inst->config->xlat_name,(RAD_XLAT_FUNC)sql_xlat);
+			xlat_unregister(inst->config->xlat_name,(RAD_XLAT_FUNC)sql_xlat, instance);
 			free(inst->config->xlat_name);
 		}
 
-		/*
-		 *	Free up dynamically allocated string pointers.
-		 */
-		for (i = 0; module_config[i].name != NULL; i++) {
-			char **p;
-			if (module_config[i].type != PW_TYPE_STRING_PTR) {
-				continue;
-			}
-
-			/*
-			 *	Treat 'config' as an opaque array of bytes,
-			 *	and take the offset into it.  There's a
-			 *      (char*) pointer at that offset, and we want
-			 *	to point to it.
-			 */
-			p = (char **) (((char *)inst->config) + module_config[i].offset);
-			if (!*p) { /* nothing allocated */
-				continue;
-			}
-			free(*p);
-			*p = NULL;
-		}
 		/*
 		 *	Catch multiple instances of the module.
 		 */
 		if (allowed_chars == inst->config->allowed_chars) {
 			allowed_chars = NULL;
 		}
-		free(inst->config);
-		inst->config = NULL;
 	}
 
 	if (inst->handle) {
@@ -860,15 +854,20 @@ static int rlm_sql_detach(void *instance)
 }
 static int rlm_sql_instantiate(CONF_SECTION * conf, void **instance)
 {
+	int i;
 	SQL_INST *inst;
 	const char *xlat_name;
 
 	inst = rad_malloc(sizeof(SQL_INST));
 	memset(inst, 0, sizeof(SQL_INST));
 
-	inst->config = rad_malloc(sizeof(SQL_CONFIG));
-	memset(inst->config, 0, sizeof(SQL_CONFIG));
-
+	/*
+	 *	The server core expects to be able to do
+	 *	cf_section_parse_free(inst).  So this hack is
+	 *	necessary.
+	 */
+	inst->config = &inst->myconfig;
+	
 	/*
 	 *	Export these methods, too.  This avoids RTDL_GLOBAL.
 	 */
@@ -989,6 +988,23 @@ static int rlm_sql_instantiate(CONF_SECTION * conf, void **instance)
 		}
 	}
 	allowed_chars = inst->config->allowed_chars;
+
+	for (i = 0; module_config[i].name != NULL; i++) {
+		char **p;
+
+		if (module_config[i].type != PW_TYPE_STRING_PTR) continue;
+		if (strstr(module_config[i].name, "_query") != NULL) continue;
+		
+		p = (char **) (((char *)inst->config) + module_config[i].offset);
+
+		if (!*p) continue;
+
+		if (strlen(*p) > ((2 * MAX_QUERY_LEN) / 3)) {
+			DEBUG("%s: WARNING Query '%s' is probably too long!",
+			      inst->config->xlat_name, module_config[i].name);
+		}
+	}
+
 
 	*instance = inst;
 

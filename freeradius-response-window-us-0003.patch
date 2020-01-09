@@ -1,7 +1,7 @@
-From 565ef5fc1f587ceebdd3c04f03f849531bd7cd9c Mon Sep 17 00:00:00 2001
+From cd8a85de248002395b52ea17fd77dc6ae6f4ed80 Mon Sep 17 00:00:00 2001
 From: Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com>
 Date: Mon, 14 Jul 2014 16:13:24 +0300
-Subject: [PATCH 3/5] Make response_window a struct timeval
+Subject: [PATCH 1/1] Make response_window a struct timeval
 
 Make home server's response_window option a struct timeval type,
 increasing precision to microseconds.
@@ -42,10 +42,10 @@ index ffeaab0..2f185da 100644
  	int		max_outstanding; /* don't overload it */
  	int		currently_outstanding;
 diff --git a/src/main/event.c b/src/main/event.c
-index 23535d6..03a75f6 100644
+index c47b046..fe44e75 100644
 --- a/src/main/event.c
 +++ b/src/main/event.c
-@@ -459,7 +459,8 @@ static void wait_for_proxy_id_to_expire(void *ctx)
+@@ -470,7 +470,8 @@ static void wait_for_proxy_id_to_expire(void *ctx)
  		request->when.tv_sec += request->home_server->coa_mrd;
  	} else
  #endif
@@ -55,7 +55,7 @@ index 23535d6..03a75f6 100644
  
  	if ((request->num_proxied_requests == request->num_proxied_responses) ||
  	    timercmp(&now, &request->when, >)) {
-@@ -1898,9 +1899,10 @@ static int proxy_request(REQUEST *request)
+@@ -1938,9 +1939,10 @@ static int proxy_request(REQUEST *request)
  	gettimeofday(&request->proxy_when, NULL);
  
  	request->next_when = request->proxy_when;
@@ -69,10 +69,10 @@ index 23535d6..03a75f6 100644
  	if (timercmp(&when, &request->next_when, <)) {
  		request->next_when = when;
 diff --git a/src/main/mainconfig.c b/src/main/mainconfig.c
-index 6a21c77..5f0a656 100644
+index 0db1b4b..49ac100 100644
 --- a/src/main/mainconfig.c
 +++ b/src/main/mainconfig.c
-@@ -901,6 +901,8 @@ int read_mainconfig(int reload)
+@@ -921,6 +921,8 @@ int read_mainconfig(int reload)
  
  	/*
  	 * Set default initial request processing delay to 1 second.
@@ -82,7 +82,7 @@ index 6a21c77..5f0a656 100644
  	mainconfig.init_delay.tv_sec = 1;
  	mainconfig.init_delay.tv_usec = 0;
 diff --git a/src/main/realms.c b/src/main/realms.c
-index ca45c70..a51241f 100644
+index 252c298..e185f7c 100644
 --- a/src/main/realms.c
 +++ b/src/main/realms.c
 @@ -321,7 +321,7 @@ static CONF_PARSER home_server_config[] = {
@@ -102,7 +102,7 @@ index ca45c70..a51241f 100644
  
  	free(hs_virtual_server); /* used only for printing during parsing */
  	hs_virtual_server = NULL;
-@@ -625,14 +626,27 @@ static int home_server_add(realm_config_t *rc, CONF_SECTION *cs)
+@@ -638,14 +639,27 @@ static int home_server_add(realm_config_t *rc, CONF_SECTION *cs)
  	if (home->ping_interval < 6) home->ping_interval = 6;
  	if (home->ping_interval > 120) home->ping_interval = 120;
  
@@ -134,7 +134,7 @@ index ca45c70..a51241f 100644
  	}
  
  	if (home->num_pings_to_alive < 3) home->num_pings_to_alive = 3;
-@@ -1126,7 +1140,8 @@ static int old_server_add(realm_config_t *rc, CONF_SECTION *cs,
+@@ -1139,7 +1153,8 @@ static int old_server_add(realm_config_t *rc, CONF_SECTION *cs,
  		home->max_outstanding = 65535*16;
  		home->zombie_period = rc->retry_delay * rc->retry_count;
  		if (home->zombie_period == 0) home->zombie_period =30;
@@ -145,5 +145,5 @@ index ca45c70..a51241f 100644
  		home->ping_check = HOME_PING_CHECK_NONE;
  
 -- 
-2.0.1
+2.1.4
 

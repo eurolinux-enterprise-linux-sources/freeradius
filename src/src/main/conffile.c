@@ -195,7 +195,7 @@ void cf_pair_free(CONF_PAIR **cp)
 	 */
 
 #ifndef NDEBUG
-	memset(*cp, 0, sizeof(*cp));
+	memset(*cp, 0, sizeof(cp));
 #endif
 	free(*cp);
 
@@ -214,7 +214,7 @@ static void cf_data_free(CONF_DATA **cd)
 		((*cd)->free)((*cd)->data);
 	}
 #ifndef NDEBUG
-	memset(*cd, 0, sizeof(*cd));
+	memset(*cd, 0, sizeof(cd));
 #endif
 	free(*cd);
 	*cd = NULL;
@@ -255,8 +255,8 @@ static int name2_cmp(const void *a, const void *b)
 	rad_assert(strcmp(one->name1, two->name1) == 0);
 
 	if (!one->name2 && !two->name2) return 0;
-	if (!one->name2) return -1;
-	if (!two->name2) return +1;
+	if (one->name2 && !two->name2) return -1;
+	if (!one->name2 && two->name2) return +1;
 
 	return strcmp(one->name2, two->name2);
 }
@@ -300,10 +300,25 @@ void cf_section_parse_free(CONF_SECTION *cs, void *base)
 	 *	Free up dynamically allocated string pointers.
 	 */
 	for (i = 0; variables[i].name != NULL; i++) {
+		int type;
 		char **p;
 
-		if ((variables[i].type != PW_TYPE_STRING_PTR) &&
-		    (variables[i].type != PW_TYPE_FILENAME)) {
+		type = variables[i].type;
+
+		if (type == PW_TYPE_SUBSECTION) {
+			CONF_SECTION *subcs;
+			subcs = cf_section_sub_find(cs, variables[i].name);
+
+			if (!subcs) continue;
+
+			if (!variables[i].dflt) continue;
+
+			cf_section_parse_free(subcs, base);
+			continue;
+		}
+
+		if ((type != PW_TYPE_STRING_PTR) &&
+		    (type != PW_TYPE_FILENAME)) {
 			continue;
 		}
 
@@ -329,6 +344,8 @@ void cf_section_parse_free(CONF_SECTION *cs, void *base)
 		free(*p);
 		*p = NULL;
 	}
+
+	cs->variables = NULL;
 }
 
 
@@ -387,7 +404,7 @@ void cf_section_free(CONF_SECTION **cs)
 	 * And free the section
 	 */
 #ifndef NDEBUG
-	memset(*cs, 0, sizeof(*cs));
+	memset(*cs, 0, sizeof(cs));
 #endif
 	free(*cs);
 
@@ -489,6 +506,8 @@ int cf_pair_replace(CONF_SECTION *cs, CONF_PAIR *cp, const char *value)
  */
 static void cf_item_add(CONF_SECTION *cs, CONF_ITEM *ci)
 {
+	if (!cs || !ci) return;
+
 	if (!cs->children) {
 		rad_assert(cs->tail == NULL);
 		cs->children = ci;
@@ -687,6 +706,8 @@ no_such_item:
 
 CONF_SECTION *cf_top_section(CONF_SECTION *cs)
 {
+	if (!cs) return NULL;
+
 	while (cs->item.parent != NULL) {
 		cs = cs->item.parent;
 	}
@@ -700,7 +721,8 @@ CONF_SECTION *cf_top_section(CONF_SECTION *cs)
  */
 static const char *cf_expand_variables(const char *cf, int *lineno,
 				       CONF_SECTION *outercs,
-				       char *output, const char *input)
+				       char *output, size_t outsize,
+				       const char *input)
 {
 	char *p;
 	const char *end, *ptr;
@@ -773,6 +795,13 @@ static const char *cf_expand_variables(const char *cf, int *lineno,
 				       cf, *lineno, input);
 				return NULL;
 			}
+
+			if (p + strlen(cp->value) >= output + outsize) {
+				radlog(L_ERR, "%s[%d]: Reference \"%s\" is too long",
+				       cf, *lineno, input);
+				return NULL;
+			}
+
 			strcpy(p, cp->value);
 			p += strlen(p);
 			ptr = end + 1;
@@ -818,6 +847,12 @@ static const char *cf_expand_variables(const char *cf, int *lineno,
 				env = name;
 			}
 
+			if (p + strlen(env) >= output + outsize) {
+				radlog(L_ERR, "%s[%d]: Reference \"%s\" is too long",
+				       cf, *lineno, input);
+				return NULL;
+			}
+
 			strcpy(p, env);
 			p += strlen(p);
 			ptr = end + 1;
@@ -828,12 +863,20 @@ static const char *cf_expand_variables(const char *cf, int *lineno,
 			 */
 			*(p++) = *(ptr++);
 		}
+
+		if (p >= (output + outsize)) {
+			radlog(L_ERR, "%s[%d]: Reference \"%s\" is too long",
+			       cf, *lineno, input);
+			return NULL;
+		}
 	} /* loop over all of the input string. */
 
 	*p = '\0';
 
 	return output;
 }
+
+static const char *parse_spaces = "                                                                                                                                                                                                                                                                ";
 
 
 /*
@@ -886,12 +929,14 @@ int cf_item_parse(CONF_SECTION *cs, const char *name,
 			radlog(L_ERR, "Bad value \"%s\" for boolean variable %s", value, name);
 			return -1;
 		}
-		cf_log_info(cs, "\t%s = %s", name, value);
+		cf_log_info(cs, "%.*s\t%s = %s",
+			    cs->depth, parse_spaces, name, value);
 		break;
 
 	case PW_TYPE_INTEGER:
 		*(int *)data = strtol(value, 0, 0);
-		cf_log_info(cs, "\t%s = %d", name, *(int *)data);
+		cf_log_info(cs, "%.*s\t%s = %d",
+			    cs->depth, parse_spaces, name, *(int *)data);
 		break;
 
 	case PW_TYPE_STRING_PTR:
@@ -917,14 +962,16 @@ int cf_item_parse(CONF_SECTION *cs, const char *name,
 			 */
 			value = cf_expand_variables("<internal>",
 						    &lineno,
-						    cs, buffer, value);
+						    cs, buffer, sizeof(buffer),
+						    value);
 			if (!value) {
 				cf_log_err(cf_sectiontoitem(cs),"Failed expanding variable %s", name);
 				return -1;
 			}
 		}
 
-		cf_log_info(cs, "\t%s = \"%s\"", name, value ? value : "(null)");
+		cf_log_info(cs, "%.*s\t%s = \"%s\"",
+			    cs->depth, parse_spaces, name, value ? value : "(null)");
 		*q = value ? strdup(value) : NULL;
 		break;
 
@@ -944,23 +991,23 @@ int cf_item_parse(CONF_SECTION *cs, const char *name,
 		 *	expanded automagically when the configuration
 		 *	file was read.
 		 */
-		if (value == dflt) {
+		if ((value == dflt) && cs) {
 			char buffer[8192];
 
 			int lineno = 0;
-
-			if (cs) lineno = cs->item.lineno;
 
 			/*
 			 *	FIXME: sizeof(buffer)?
 			 */
 			value = cf_expand_variables("?",
 						    &lineno,
-						    cs, buffer, value);
+						    cs, buffer, sizeof(buffer),
+						    value);
 			if (!value) return -1;
 		}
 
-		cf_log_info(cs, "\t%s = \"%s\"", name, value ? value : "(null)");
+		cf_log_info(cs, "%.*s\t%s = \"%s\"",
+			    cs->depth, parse_spaces, name, value ? value : "(null)");
 		*q = value ? strdup(value) : NULL;
 
 		/*
@@ -991,7 +1038,8 @@ int cf_item_parse(CONF_SECTION *cs, const char *name,
 		 */
 		if (strcmp(value, "*") == 0) {
 			*(uint32_t *) data = htonl(INADDR_ANY);
-			cf_log_info(cs, "\t%s = *", name);
+			cf_log_info(cs, "%.*s\t%s = *",
+				    cs->depth, parse_spaces, name);
 			break;
 		}
 		if (ip_hton(value, AF_INET, &ipaddr) < 0) {
@@ -1000,9 +1048,11 @@ int cf_item_parse(CONF_SECTION *cs, const char *name,
 		}
 		
 		if (strspn(value, "0123456789.") == strlen(value)) {
-			cf_log_info(cs, "\t%s = %s", name, value);
+			cf_log_info(cs, "%.*s\t%s = %s",
+				    cs->depth, parse_spaces, name, value);
 		} else {
-			cf_log_info(cs, "\t%s = %s IP address [%s]", name, value,
+			cf_log_info(cs, "%.*s\t%s = %s IP address [%s]",
+				    cs->depth, parse_spaces, name, value,
 			       ip_ntoh(&ipaddr, ipbuf, sizeof(ipbuf)));
 		}
 		*(uint32_t *) data = ipaddr.ipaddr.ip4addr.s_addr;
@@ -1013,8 +1063,9 @@ int cf_item_parse(CONF_SECTION *cs, const char *name,
 			radlog(L_ERR, "Can't find IPv6 address for host %s", value);
 			return -1;
 		}
-		cf_log_info(cs, "\t%s = %s IPv6 address [%s]", name, value,
-			       ip_ntoh(&ipaddr, ipbuf, sizeof(ipbuf)));
+		cf_log_info(cs, "%.*s\t%s = %s IPv6 address [%s]",
+			    cs->depth, parse_spaces, name, value,
+			    ip_ntoh(&ipaddr, ipbuf, sizeof(ipbuf)));
 		memcpy(data, &ipaddr.ipaddr.ip6addr,
 		       sizeof(ipaddr.ipaddr.ip6addr));
 		break;
@@ -1028,6 +1079,7 @@ int cf_item_parse(CONF_SECTION *cs, const char *name,
 		CONF_PAIR *cpn;
 
 		cpn = cf_pair_alloc(name, value, T_OP_SET, T_BARE_WORD, cs);
+		if (!cpn) return -1;
 		cpn->item.filename = "<internal>";
 		cpn->item.lineno = 0;
 		cf_item_add(cs, cf_pairtoitem(cpn));
@@ -1036,7 +1088,46 @@ int cf_item_parse(CONF_SECTION *cs, const char *name,
 	return rcode;
 }
 
-static const char *parse_spaces = "                                                                                                                                                                                                                                                                ";
+
+/*
+ *	A copy of cf_section_parse that initializes pointers before
+ *	parsing them.
+ */
+static void cf_section_parse_init(CONF_SECTION *cs, void *base,
+				  const CONF_PARSER *variables)
+{
+	int i;
+	void *data;
+
+	for (i = 0; variables[i].name != NULL; i++) {
+		if (variables[i].type == PW_TYPE_SUBSECTION) {
+			CONF_SECTION *subcs;
+			subcs = cf_section_sub_find(cs, variables[i].name);
+			if (!subcs) continue;
+
+			if (!variables[i].dflt) continue;
+
+			cf_section_parse_init(subcs, base,
+					      (const CONF_PARSER *) variables[i].dflt);
+			continue;
+		}
+
+		if ((variables[i].type != PW_TYPE_STRING_PTR) &&
+		    (variables[i].type != PW_TYPE_FILENAME)) {
+			continue;
+		}
+
+		if (variables[i].data) {
+			data = variables[i].data; /* prefer this. */
+		} else if (base) {
+			data = ((char *)base) + variables[i].offset;
+		} else {
+			continue;
+		}
+
+		*(char **) data = NULL;
+	} /* for all variables in the configuration section */
+}
 
 /*
  *	Parse a configuration section into user-supplied variables.
@@ -1056,6 +1147,8 @@ int cf_section_parse(CONF_SECTION *cs, void *base,
 		cf_log_info(cs, "%.*s%s %s {", cs->depth, parse_spaces,
 		       cs->name1, cs->name2);
 	}
+
+	cf_section_parse_init(cs, base, variables);
 
 	/*
 	 *	Handle the known configuration parameters.
@@ -1205,6 +1298,41 @@ static int condition_looks_ok(const char **ptr)
 
 	DEBUG3("Unexpected error");
 	return 0;
+}
+
+int cf_exclude_file(const char *filename)
+{
+	int i;
+	size_t len;
+	const char *p = filename;
+
+	/*
+	 *	FIXME: Maybe later make this a globally set configuration
+	 *	variable.  But that's low priority.
+	 */
+	static const char *excluded[] = {
+		"rpmsave", "rpmnew", "dpkg-new", "dpkg-dist", "dpkg-old",
+		"bak", NULL
+	};
+
+	if (!p || !*p) return TRUE; /* coding error */
+
+	if (*p == '.') return TRUE; /* ".", "..", ".foo", ... */
+
+	if (*p == '#') return TRUE; /* #foo# */
+
+	len = strlen(p);
+	if (p[len - 1] == '~') return TRUE; /* foo~ */
+
+	p = strrchr(p, '.');
+	if (!p) return FALSE;	/* just "foo", it's OK */
+
+	p++;
+	for (i = 0; excluded[i] != NULL; i++) {
+		if (strcmp(p, excluded[i]) == 0) return TRUE;
+	}
+
+	return FALSE;
 }
 
 
@@ -1405,7 +1533,7 @@ static int cf_section_read(const char *filename, int *lineno, FILE *fp,
 
 			if (buf2[0] == '$') relative = 0;
 
-			value = cf_expand_variables(filename, lineno, this, buf, buf2);
+			value = cf_expand_variables(filename, lineno, this, buf, sizeof(buf), buf2);
 			if (!value) return -1;
 
 			if (!FR_DIR_IS_RELATIVE(value)) relative = 0;
@@ -1434,6 +1562,23 @@ static int cf_section_read(const char *filename, int *lineno, FILE *fp,
 				struct stat stat_buf;
 
 				DEBUG2("including files in directory %s", value );
+#ifdef S_IWOTH
+				/*
+				 *	Security checks.
+				 */
+				if (stat(value, &stat_buf) < 0) {
+					radlog(L_ERR, "%s[%d]: Failed reading directory %s: %s",
+					       filename, *lineno, 
+					       value, strerror(errno));
+					return -1;
+				}
+
+				if ((stat_buf.st_mode & S_IWOTH) != 0) {
+					radlog(L_ERR|L_CONS, "%s[%d]: Directory %s is globally writable.  Refusing to start due to insecure configuration.",
+					       filename, *lineno, value);
+					return -1;
+				}
+#endif
 				dir = opendir(value);
 				if (!dir) {
 					radlog(L_ERR, "%s[%d]: Error reading directory %s: %s",
@@ -1443,25 +1588,11 @@ static int cf_section_read(const char *filename, int *lineno, FILE *fp,
 				}
 
 				/*
-				 *	Read the directory, ignoring "." files.
+				 *	Read the directory, ignoring some files.
 				 */
 				while ((dp = readdir(dir)) != NULL) {
-					const char *p;
-
-					if (dp->d_name[0] == '.') continue;
-
-					/*
-					 *	Check for valid characters
-					 */
-					for (p = dp->d_name; *p != '\0'; p++) {
-						if (isalpha((int)*p) ||
-						    isdigit((int)*p) ||
-						    (*p == '-') ||
-						    (*p == '_') ||
-						    (*p == '.')) continue;
-						break;
-					}
-					if (*p != '\0') continue;
+					if (cf_exclude_file(dp->d_name))
+						continue;
 
 					snprintf(buf2, sizeof(buf2), "%s%s",
 						 value, dp->d_name);
@@ -1561,6 +1692,7 @@ static int cf_section_read(const char *filename, int *lineno, FILE *fp,
 				       filename, *lineno);
 				return -1;
 			}
+			/* FALL-THROUGH */
 
 		case T_OP_EQ:
 		case T_OP_SET:
@@ -1589,7 +1721,7 @@ static int cf_section_read(const char *filename, int *lineno, FILE *fp,
 			if ((t3 == T_BARE_WORD) ||
 			    (t3 == T_DOUBLE_QUOTED_STRING)) {
 				value = cf_expand_variables(filename, lineno, this,
-							    buf, buf3);
+							    buf, sizeof(buf), buf3);
 				if (!value) return -1;
 			} else if ((t3 == T_EOL) ||
 				   (t3 == T_HASH)) {
@@ -1681,6 +1813,7 @@ static int cf_section_read(const char *filename, int *lineno, FILE *fp,
 				       filename, *lineno, buf1, buf2);
 				return -1;
 			}
+			/* FALL-THROUGH */
 
 		case T_LCBRACE:
 		section_alloc:
@@ -1737,9 +1870,17 @@ int cf_file_include(const char *filename, CONF_SECTION *cs)
 
 	DEBUG2( "including configuration file %s", filename);
 
+	fp = fopen(filename, "r");
+	if (!fp) {
+		radlog(L_ERR|L_CONS, "Unable to open file \"%s\": %s",
+		       filename, strerror(errno));
+		return -1;
+	}
+
 	if (stat(filename, &statbuf) == 0) {
 #ifdef S_IWOTH
 		if ((statbuf.st_mode & S_IWOTH) != 0) {
+			fclose(fp);
 			radlog(L_ERR|L_CONS, "Configuration file %s is globally writable.  Refusing to start due to insecure configuration.",
 			       filename);
 			return -1;
@@ -1748,18 +1889,12 @@ int cf_file_include(const char *filename, CONF_SECTION *cs)
 
 #ifdef S_IROTH
 		if (0 && (statbuf.st_mode & S_IROTH) != 0) {
+			fclose(fp);
 			radlog(L_ERR|L_CONS, "Configuration file %s is globally readable.  Refusing to start due to insecure configuration.",
 			       filename);
 			return -1;
 		}
 #endif
-	}
-
-	fp = fopen(filename, "r");
-	if (!fp) {
-		radlog(L_ERR|L_CONS, "Unable to open file \"%s\": %s",
-		       filename, strerror(errno));
-		return -1;
 	}
 
 	if (cf_data_find_internal(cs, filename, PW_TYPE_FILENAME)) {
@@ -1886,6 +2021,11 @@ const char *cf_pair_attr(CONF_PAIR *pair)
 const char *cf_pair_value(CONF_PAIR *pair)
 {
 	return (pair ? pair->value : NULL);
+}
+
+FR_TOKEN cf_pair_operator(CONF_PAIR *pair)
+{
+	return (pair ? pair->operator : T_OP_INVALID);
 }
 
 /*
@@ -2093,17 +2233,43 @@ CONF_SECTION *cf_section_sub_find_name2(const CONF_SECTION *cs,
 	CONF_ITEM    *ci;
 
 	if (!cs) cs = mainconfig.config;
-
-	if (name1 && (cs->section_tree)) {
+	if (!cs) return NULL;
+	if (name1) {
 		CONF_SECTION mycs, *master_cs;
+
+		if (!cs->section_tree) return NULL;
 
 		mycs.name1 = name1;
 		mycs.name2 = name2;
 
 		master_cs = rbtree_finddata(cs->section_tree, &mycs);
-		if (master_cs) {
-			return rbtree_finddata(master_cs->name2_tree, &mycs);
+		if (!master_cs) return NULL;
+
+		/*
+		 *	Look it up in the name2 tree.  If it's there,
+		 *	return it.
+		 */
+		if (master_cs->name2_tree) {
+			CONF_SECTION *subcs;
+
+			subcs = rbtree_finddata(master_cs->name2_tree, &mycs);
+			if (subcs) return subcs;
 		}
+
+		/*
+		 *	We don't insert ourselves into the name2 tree.
+		 *	So if there's nothing in the name2 tree, maybe
+		 *	*we* are the answer.
+		 */
+		if (!master_cs->name2 && name2) return NULL;
+		if (master_cs->name2 && !name2) return NULL;
+		if (!master_cs->name2 && !name2) return master_cs;
+
+		if (strcmp(master_cs->name2, name2) == 0) {
+			return master_cs;
+		}
+
+		return NULL;
 	}
 
 	/*
@@ -2125,10 +2291,13 @@ CONF_SECTION *cf_section_sub_find_name2(const CONF_SECTION *cs,
 			continue; /* don't do the string comparisons below */
 		}
 
-		if ((strcmp(subcs->name1, name1) == 0) &&
-		    (subcs->name2 != NULL) &&
-		    (strcmp(subcs->name2, name2) == 0))
-			break;
+		if (strcmp(subcs->name1, name1) != 0) continue;
+		if (!subcs->name2 && name2) continue;
+		if (subcs->name2 && !name2) continue;
+
+		if (!subcs->name2 && !name2) break;
+
+		if (strcmp(subcs->name2, name2) == 0) break;
 	}
 
 	return cf_itemtosection(ci);

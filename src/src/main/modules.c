@@ -356,7 +356,10 @@ static void module_instance_free_old(CONF_SECTION *cs, module_instance_t *node,
 		cf_section_parse_free(cs, mh->insthandle);
 		
 		if (node->entry->module->detach) {
-			(node->entry->module->detach)(mh->insthandle);
+			if ((node->entry->module->detach)(mh->insthandle) < 0) {
+				DEBUG("WARNING: Failed detaching module %s cleanly.  Doing forcible shutdown", node->name);
+
+			}
 		} else {
 			free(mh->insthandle);
 		}
@@ -375,6 +378,8 @@ static void module_instance_free(void *data)
 	module_instance_t *this = data;
 
 	module_instance_free_old(this->cs, this, time(NULL) + 100);
+
+	cf_section_parse_free(this->cs, this->insthandle);
 
 	if (this->entry->module->detach) {
 		(this->entry->module->detach)(this->insthandle);
@@ -414,7 +419,15 @@ static void module_entry_free(void *data)
 {
 	module_entry_t *this = data;
 
-	lt_dlclose(this->handle);	/* ignore any errors */
+#ifndef NDEBUG
+	/*
+	 *	Don't dlclose() modules if we're doing memory
+	 *	debugging.  This removes the symbols needed by
+	 *	valgrind.
+	 */
+	if (!mainconfig.debug_memory)
+#endif
+	  lt_dlclose(this->handle);	/* ignore any errors */
 	memset(this, 0, sizeof(*this));
 	free(this);
 }

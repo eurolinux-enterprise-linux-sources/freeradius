@@ -74,6 +74,12 @@ RCSID("$Id$")
  */
 const char *radius_dir = RADDBDIR;
 const char *progname = "radmin";
+const char *radmin_version = "radmin version " RADIUSD_VERSION_STRING
+#ifdef RADIUSD_VERSION_COMMIT
+" (git #" RADIUSD_VERSION_COMMIT ")"
+#endif
+;
+
 
 /*
  *	The rest of this is because the conffile.c, etc. assume
@@ -100,6 +106,8 @@ static int fr_domain_socket(const char *path)
 	size_t len;
 	socklen_t socklen;
         struct sockaddr_un saremote;
+
+	if (!path) return -1;
 
 	len = strlen(path);
 	if (len >= sizeof(saremote.sun_path)) {
@@ -370,7 +378,7 @@ int main(int argc, char **argv)
 
 		cs = cf_file_read(buffer);
 		if (!cs) {
-			fprintf(stderr, "%s: Errors reading %s\n",
+			fprintf(stderr, "%s: Errors reading or parsing %s\n",
 				progname, buffer);
 			exit(1);
 		}
@@ -502,8 +510,8 @@ int main(int argc, char **argv)
 	}
 
 	if (!done_license && !quiet) {
-		printf("radmin " RADIUSD_VERSION " - FreeRADIUS Server administration tool.\n");
-		printf("Copyright (C) 2008-2011 The FreeRADIUS server project and contributors.\n");
+		printf("%s - FreeRADIUS Server administration tool.\n", radmin_version);
+		printf("Copyright (C) 2008-2012 The FreeRADIUS server project and contributors.\n");
 		printf("There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A\n");
 		printf("PARTICULAR PURPOSE.\n");
 		printf("You may redistribute copies of FreeRADIUS under the terms of the\n");

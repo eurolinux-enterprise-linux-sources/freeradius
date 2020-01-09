@@ -43,6 +43,7 @@ typedef struct eap_tls_conf {
 	char		*dh_file;
 	char		*rsa_file;
 	char		*make_cert_command;
+	char		*virtual_server;
 	int		rsa_key;
 	int		dh_key;
 	int		rsa_key_length;
@@ -50,6 +51,8 @@ typedef struct eap_tls_conf {
 	int		verify_depth;
 	int		file_type;
 	int		include_length;
+	int		disable_tlsv1_1;
+	int		disable_tlsv1_2;
 
 	/*
 	 *	Always < 4096 (due to radius limit), 0 by default = 2048
@@ -65,7 +68,7 @@ typedef struct eap_tls_conf {
         int     	session_timeout;
         int     	session_cache_size;
 	char		*session_id_name;
-	char		session_context_id[128];
+	char		session_context_id[SSL_MAX_SSL_SESSION_ID_LENGTH];
 	time_t		session_last_flushed;
 
 	char		*verify_tmp_dir;
@@ -78,6 +81,9 @@ typedef struct eap_tls_conf {
 	int		ocsp_enable;
 	int		ocsp_override_url;
 	char		*ocsp_url;
+	int		ocsp_use_nonce;
+	int		ocsp_timeout;
+	int		ocsp_softfail;
 #endif
 
 #if OPENSSL_VERSION_NUMBER >= 0x0090800fL
@@ -89,7 +95,7 @@ typedef struct eap_tls_conf {
 
 /* This structure gets stored in arg */
 typedef struct _eap_tls_t {
-	EAP_TLS_CONF 	*conf;
+	EAP_TLS_CONF 	conf;
 	SSL_CTX		*ctx;
 #ifdef HAVE_OPENSSL_OCSP_H
 	X509_STORE	*store; /* OCSP Revocation Store */

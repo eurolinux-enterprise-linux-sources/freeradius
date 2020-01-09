@@ -247,8 +247,14 @@ static int eap_sim_sendchallenge(EAP_HANDLER *handler)
 	pairreplace(outvps, newvp);
 
 	/* make a copy of the identity */
-	ess->keys.identitylen = strlen(handler->identity);
-	memcpy(ess->keys.identity, handler->identity, ess->keys.identitylen);
+	newvp = pairfind(*invps, ATTRIBUTE_EAP_SIM_BASE + PW_EAP_SIM_IDENTITY);
+	if (newvp) {
+		ess->keys.identitylen = newvp->length;
+		memcpy(ess->keys.identity, newvp->vp_octets, newvp->length);
+	} else {
+		ess->keys.identitylen = strlen(handler->identity);
+		memcpy(ess->keys.identity, handler->identity, ess->keys.identitylen);
+	}
 
 	/* all set, calculate keys! */
 	eapsim_calculate_keys(&ess->keys);
@@ -551,7 +557,8 @@ static int eap_sim_authenticate(void *arg, EAP_HANDLER *handler)
 					 handler->eap_ds->response->type.length);
 
 	if(!success) {
-	  return 0;
+		DEBUG("Failed to decode EAP-SIM");
+		return 0;
 	}
 
 	/* see what kind of message we have gotten */
@@ -566,6 +573,7 @@ static int eap_sim_authenticate(void *arg, EAP_HANDLER *handler)
 	 *	Client error supersedes anything else.
 	 */
 	if (subtype == eapsim_client_error) {
+		DEBUG2("Client says error.  Stopping!");
 		return 0;
 	}
 

@@ -26,7 +26,7 @@ CREATE TABLE radacct (
   nasporttype varchar(32) default NULL,
   acctstarttime datetime NULL default NULL,
   acctstoptime datetime NULL default NULL,
-  acctsessiontime int(12) default NULL,
+  acctsessiontime int(12) unsigned default NULL,
   acctauthentic varchar(32) default NULL,
   connectinfo_start varchar(50) default NULL,
   connectinfo_stop varchar(50) default NULL,
@@ -38,19 +38,19 @@ CREATE TABLE radacct (
   servicetype varchar(32) default NULL,
   framedprotocol varchar(32) default NULL,
   framedipaddress varchar(15) NOT NULL default '',
-  acctstartdelay int(12) default NULL,
-  acctstopdelay int(12) default NULL,
+  acctstartdelay int(12) unsigned default NULL,
+  acctstopdelay int(12) unsigned default NULL,
   xascendsessionsvrkey varchar(10) default NULL,
   PRIMARY KEY  (radacctid),
+  UNIQUE KEY acctuniqueid (acctuniqueid),
   KEY username (username),
   KEY framedipaddress (framedipaddress),
   KEY acctsessionid (acctsessionid),
   KEY acctsessiontime (acctsessiontime),
-  KEY acctuniqueid (acctuniqueid),
   KEY acctstarttime (acctstarttime),
   KEY acctstoptime (acctstoptime),
   KEY nasipaddress (nasipaddress)
-) ;
+) ENGINE = INNODB;
 
 #
 # Table structure for table 'radcheck'
@@ -131,4 +131,4 @@ CREATE TABLE radpostauth (
   reply varchar(32) NOT NULL default '',
   authdate timestamp NOT NULL,
   PRIMARY KEY  (id)
-) ;
+) ENGINE = INNODB;

@@ -1031,6 +1031,7 @@ static int parse_attribute_block(policy_lex_file_t *lexer,
 		fprintf(stderr, "%s[%d]: Unexpected token %s\n",
 			lexer->filename, lexer->lineno,
 			fr_int2str(rlm_policy_tokens, token, "?"));
+		rlm_policy_free_item((policy_item_t *)this);
 		return 0;	/* unknown */
 	}
 
@@ -1588,8 +1589,7 @@ static int parse_include(policy_lex_file_t *lexer)
 			while ((dp = readdir(dir)) != NULL) {
 				struct stat buf;
 
-				if (dp->d_name[0] == '.') continue;
-				if (strchr(dp->d_name, '~') != NULL) continue;
+				if (cf_exclude_file(dp->d_name)) continue;
 
 				strlcpy(p, dp->d_name,
 					sizeof(buffer) - (p - buffer));

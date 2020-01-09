@@ -31,6 +31,14 @@ RCSID("$Id$")
 #include <fcntl.h>
 #endif
 
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+
+#ifdef HAVE_GRP_H
+#include <grp.h>
+#endif
+
 #ifdef HAVE_SYSLOG_H
 #include <syslog.h>
 
@@ -40,12 +48,20 @@ RCSID("$Id$")
 #endif
 
 /*
+ *	Syslog facilities from main/mainconfig.c
+ */
+extern const FR_NAME_NUMBER syslog_str2fac[];
+
+/*
  *	Define a structure for our module configuration.
  */
 typedef struct rlm_linelog_t {
 	CONF_SECTION	*cs;
 	char		*filename;
+	char		*syslog_facility;
+	int		facility;
 	int		permissions;
+	char		*group;
 	char		*line;
 	char		*reference;
 } rlm_linelog_t;
@@ -62,8 +78,12 @@ typedef struct rlm_linelog_t {
 static const CONF_PARSER module_config[] = {
 	{ "filename",  PW_TYPE_STRING_PTR,
 	  offsetof(rlm_linelog_t,filename), NULL,  NULL},
+	{ "syslog_facility",  PW_TYPE_STRING_PTR,
+	  offsetof(rlm_linelog_t,syslog_facility), NULL,  NULL},
 	{ "permissions",  PW_TYPE_INTEGER,
 	  offsetof(rlm_linelog_t,permissions), NULL,  "0600"},
+	{ "group",  PW_TYPE_STRING_PTR,
+	  offsetof(rlm_linelog_t,group), NULL,  NULL},
 	{ "format",  PW_TYPE_STRING_PTR,
 	  offsetof(rlm_linelog_t,line), NULL,  NULL},
 	{ "reference",  PW_TYPE_STRING_PTR,
@@ -114,6 +134,19 @@ static int linelog_instantiate(CONF_SECTION *conf, void **instance)
 		linelog_detach(inst);
 		return -1;
 	}
+#else
+	inst->facility = 0;
+
+	if (inst->syslog_facility) {
+		inst->facility = fr_str2int(syslog_str2fac, inst->syslog_facility, -1);
+		if (inst->facility < 0) {
+			radlog(L_ERR, "rlm_linelog: Bad syslog facility '%s'", inst->syslog_facility);
+			linelog_detach(inst);
+			return -1;
+		}
+	}
+
+	inst->facility |= LOG_INFO;
 #endif
 
 	if (!inst->line) {
@@ -177,7 +210,7 @@ static size_t linelog_escape_func(char *out, size_t outlen, const char *in)
 
 		default:
 			if (outlen <= 4) break;
-			snprintf(out, outlen,  "\\%03o", *in);
+			snprintf(out, outlen,  "\\%03o", (uint8_t) *in);
 			in++;
 			out += 4;
 			outlen -= 4;
@@ -198,6 +231,12 @@ static int do_linelog(void *instance, REQUEST *request)
 	char line[1024];
 	rlm_linelog_t *inst = (rlm_linelog_t*) instance;
 	const char *value = inst->line;
+
+#ifdef HAVE_GRP_H
+	gid_t gid;
+	struct group *grp;
+	char *endptr;
+#endif
 
 	if (inst->reference) {
 		CONF_ITEM *ci;
@@ -261,7 +300,27 @@ static int do_linelog(void *instance, REQUEST *request)
 			       buffer, strerror(errno));
 			return RLM_MODULE_FAIL;
 		}
+
+#ifdef HAVE_GRP_H
+		if (inst->group != NULL) {
+			gid = strtol(inst->group, &endptr, 10);
+			if (*endptr != '\0') {
+				grp = getgrnam(inst->group);
+				if (grp == NULL) {
+					RDEBUG2("Unable to find system group \"%s\"", inst->group);
+					goto skip_group;
+				}
+				gid = grp->gr_gid;
+			}
+
+			if (chown(buffer, -1, gid) == -1) {
+				RDEBUG2("Unable to change system group of \"%s\"", buffer);
+			}
+		}
+#endif
 	}
+
+ skip_group:
 
 	/*
 	 *	FIXME: Check length.
@@ -277,7 +336,7 @@ static int do_linelog(void *instance, REQUEST *request)
 
 #ifdef HAVE_SYSLOG_H
 	} else {
-		syslog(LOG_INFO, "%s", line);
+		syslog(inst->facility, "%s", line);
 #endif
 	}
 

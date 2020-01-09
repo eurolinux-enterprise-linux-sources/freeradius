@@ -49,6 +49,9 @@ static const FR_NAME_NUMBER levels[] = {
 	{ NULL, 0 }
 };
 
+int log_dates_utc = 0;
+
+
 /*
  *	Log the message to the logfile. Include the severity and
  *	a time stamp.
@@ -93,7 +96,14 @@ int vradlog(int lvl, const char *fmt, va_list ap)
 		time_t timeval;
 
 		timeval = time(NULL);
-		CTIME_R(&timeval, buffer + len, sizeof(buffer) - len - 1);
+#ifdef HAVE_GMTIME_R
+		if (log_dates_utc) {
+			struct tm utc;
+			gmtime_r(&timeval, &utc);
+			asctime_r(&utc, buffer + len);
+		} else
+#endif
+		  CTIME_R(&timeval, buffer + len, sizeof(buffer) - len - 1);
 
 		s = fr_int2str(levels, (lvl & ~L_CONS), ": ");
 
@@ -280,22 +290,29 @@ void radlog_request(int lvl, int priority, REQUEST *request, const char *msg, ..
 		time_t timeval;
 		timeval = time(NULL);
 
-		CTIME_R(&timeval, buffer + len, sizeof(buffer) - len - 1);
-		
+#ifdef HAVE_GMTIME_R
+		if (log_dates_utc) {
+			struct tm utc;
+			gmtime_r(&timeval, &utc);
+			ASCTIME_R(&utc, buffer + len, sizeof(buffer) - len - 1);
+		} else
+#endif
+		{
+			CTIME_R(&timeval, buffer + len, sizeof(buffer) - len - 1);
+		}
+
 		s = strrchr(buffer, '\n');
 		if (s) {
 			s[0] = ' ';
 			s[1] = '\0';
 		}
 		
-		s = fr_int2str(levels, (lvl & ~L_CONS), ": ");
-		
-		strcat(buffer, s);
+		strcat(buffer, fr_int2str(levels, (lvl & ~L_CONS), ": "));
 		len = strlen(buffer);
 	}
 	
 	if (request && request->module[0]) {
-		snprintf(buffer + len, sizeof(buffer) + len, "[%s] ", request->module);
+		snprintf(buffer + len, sizeof(buffer) - len, "[%s] ", request->module);
 		len = strlen(buffer);
 	}
 	vsnprintf(buffer + len, sizeof(buffer) - len, msg, ap);
@@ -303,8 +320,10 @@ void radlog_request(int lvl, int priority, REQUEST *request, const char *msg, ..
 	if (!fp) {
 		radlog(lvl, "%s", buffer);
 	} else {
+		if (strlcat(buffer, "\n", sizeof(buffer)) >= sizeof(buffer)) {
+			buffer[sizeof(buffer) - 1] = '\n';
+		}
 		fputs(buffer, fp);
-		fputc('\n', fp);
 		fclose(fp);
 	}
 

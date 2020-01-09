@@ -36,7 +36,9 @@ RCSIDH(libradius_h, "$Id$")
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <signal.h>
 
+#include <freeradius-devel/threads.h>
 #include <freeradius-devel/radius.h>
 #include <freeradius-devel/token.h>
 #include <freeradius-devel/hash.h>
@@ -47,6 +49,18 @@ RCSIDH(libradius_h, "$Id$")
 #endif
 #endif
 
+#ifndef FALSE
+#define FALSE 0
+#endif
+#ifndef TRUE
+/*
+ *	This definition of true as NOT false is definitive. :) Making
+ *	it '1' can cause problems on stupid platforms.  See articles
+ *	on C portability for more information.
+ */
+#define TRUE (!FALSE)
+#endif
+
 /*
  *  Include for modules.
  */
@@ -55,6 +69,10 @@ RCSIDH(libradius_h, "$Id$")
 
 #ifdef __cplusplus
 extern "C" {
+#endif
+
+#ifndef HAVE_SIG_T
+typedef void (*sig_t)(int);
 #endif
 
 #define EAP_START               2
@@ -115,6 +133,8 @@ typedef struct attr_flags {
 #define FLAG_ENCRYPT_USER_PASSWORD   (1)
 #define FLAG_ENCRYPT_TUNNEL_PASSWORD (2)
 #define FLAG_ENCRYPT_ASCEND_SECRET   (3)
+
+extern const FR_NAME_NUMBER dict_attr_types[];
 
 typedef struct dict_attr {
 	unsigned int		attr;
@@ -260,6 +280,7 @@ DICT_ATTR	*dict_attrbyvalue(unsigned int attr);
 DICT_ATTR	*dict_attrbyname(const char *attr);
 DICT_VALUE	*dict_valbyattr(unsigned int attr, int val);
 DICT_VALUE	*dict_valbyname(unsigned int attr, const char *val);
+const char	*dict_valnamebyattr(unsigned int attr, int value);
 int		dict_vendorbyname(const char *name);
 DICT_VENDOR	*dict_vendorbyvalue(int vendor);
 
@@ -271,14 +292,12 @@ DICT_VENDOR	*dict_vendorbyvalue(int vendor);
 #endif
 
 /* get around diffrent ctime_r styles */
-#ifdef CTIMERSTYLE
-#if CTIMERSTYLE == SOLARISSTYLE
+#if defined(CTIMERSTYLE) && ( CTIMERSTYLE == SOLARISSTYLE)
 #define CTIME_R(a,b,c) ctime_r(a,b,c)
+#define ASCTIME_R(a,b,c) asctime_r(a,b,c)
 #else
 #define CTIME_R(a,b,c) ctime_r(a,b)
-#endif
-#else
-#define CTIME_R(a,b,c) ctime_r(a,b)
+#define ASCTIME_R(a,b,c) asctime_r(a,b)
 #endif
 
 /* md5.c */
@@ -329,6 +348,7 @@ int		rad_chap_encode(RADIUS_PACKET *packet, uint8_t *output,
 VALUE_PAIR	*rad_attr2vp(const RADIUS_PACKET *packet, const RADIUS_PACKET *original,
 			     const char *secret, int attribute, int length,
 			     const uint8_t *data);
+ssize_t		rad_vp2data(const VALUE_PAIR *vp, uint8_t *out, size_t outlen);
 int		rad_vp2attr(const RADIUS_PACKET *packet,
 			    const RADIUS_PACKET *original, const char *secret,
 			    const VALUE_PAIR *vp, uint8_t *ptr);
@@ -387,6 +407,8 @@ void		fr_printf_log(const char *, ...)
 /*
  *	Several handy miscellaneous functions.
  */
+int		fr_fault_setup(char const *cmd, char const *program);
+int		fr_set_signal(int sig, sig_t func);
 const char *	ip_ntoa(char *, uint32_t);
 char		*ifid_ntoa(char *buffer, size_t size, uint8_t *ifid);
 uint8_t		*ifid_aton(const char *ifid_str, uint8_t *ifid);
@@ -417,7 +439,7 @@ int fr_sockaddr2ipaddr(const struct sockaddr_storage *sa, socklen_t salen,
 #ifdef ASCEND_BINARY
 /* filters.c */
 int		ascend_parse_filter(VALUE_PAIR *pair);
-void		print_abinary(VALUE_PAIR *vp, char *buffer, size_t len);
+void		print_abinary(const VALUE_PAIR *vp, char *buffer, size_t len, int delimitst);
 #endif /*ASCEND_BINARY*/
 
 /* random numbers in isaac.c */

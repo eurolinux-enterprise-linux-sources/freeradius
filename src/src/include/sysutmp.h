@@ -14,10 +14,10 @@ RCSIDH(sysutmp_h, "$Id$")
  *  If we have BOTH utmp.h and utmpx.h, then
  *  we prefer to use utmp.h, but only on systems other than Solaris.
  */
-#if !defined(sun) && !defined(sgi) && !defined(hpux)
-#ifdef HAVE_UTMP_H
-#undef HAVE_UTMPX_H
-#endif
+#if !defined(_sun) && !defined(sgi) && !defined(hpux)
+#  ifdef HAVE_UTMP_H
+#    undef HAVE_UTMPX_H
+#  endif
 #endif
 
 #if defined(HAVE_UTMP_H) || defined(HAVE_UTMPX_H)
@@ -30,7 +30,7 @@ RCSIDH(sysutmp_h, "$Id$")
 #  define UT_NAMESIZE	32
 #  define UT_LINESIZE	32
 #  define UT_HOSTSIZE	257
-#ifdef hpux
+#if defined(hpux) || defined(__FreeBSD__)
 #  define ut_name ut_user
 #endif
 #else
@@ -47,7 +47,7 @@ extern "C" {
 #  define UT_HOSTSIZE	64
 #endif
 
-#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(bsdi) || defined(__OpenBSD__) || defined(__APPLE__)
+#if (defined(__FreeBSD__) && !defined(HAVE_UTMPX_H)) || defined(__NetBSD__) || defined(bsdi) || defined(__OpenBSD__) || defined(__APPLE__)
 #  ifndef UTMP_FILE
 #    define UTMP_FILE "/var/run/utmp"
 #  endif

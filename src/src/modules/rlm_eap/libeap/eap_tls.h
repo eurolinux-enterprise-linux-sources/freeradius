@@ -158,6 +158,8 @@ typedef struct _tls_session_t {
 					unsigned int size);
 
 
+	int		invalid_hb_used;
+
 	/*
 	 * Framed-MTU attribute in RADIUS,
 	 * if present, can also be used to set this
@@ -194,6 +196,7 @@ int 		eaptls_request(EAP_DS *eap_ds, tls_session_t *ssn);
 void            eaptls_gen_mppe_keys(VALUE_PAIR **reply_vps, SSL *s,
 				     const char *prf_label);
 void		eapttls_gen_challenge(SSL *s, uint8_t *buffer, size_t size);
+void		eaptls_gen_eap_key(SSL *s, uint32_t header, VALUE_PAIR **vps);
 
 #define BUFFER_SIZE 1024
 

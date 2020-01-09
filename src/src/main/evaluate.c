@@ -77,9 +77,12 @@ static const char *expand_string(char *buffer, size_t sizeof_buffer,
 
 	case T_BACK_QUOTED_STRING:
 		result = radius_exec_program(value, request, 1,
-					     buffer, sizeof_buffer, NULL,
-					     NULL, 0);
+					     buffer, sizeof_buffer,
+					     EXEC_TIMEOUT,
+					     NULL, NULL, 0);
 		if (result != 0) {
+			radlog(L_ERR, "Failed to execute program in string expansion: %s",
+			       value);
 			return NULL;
 		}
 
@@ -728,8 +731,6 @@ int radius_evaluate_condition(REQUEST *request, int modreturn, int depth,
 			pleft = expand_string(xleft, sizeof(xleft), request,
 					      lt, left);
 			if (!pleft) {
-				radlog(L_ERR, "Failed expanding string at: %s",
-				       left);
 				return FALSE;
 			}
 		}
@@ -817,8 +818,6 @@ int radius_evaluate_condition(REQUEST *request, int modreturn, int depth,
 			pright = expand_string(xright, sizeof(xright), request,
 					       rt, right);
 			if (!pright) {
-				radlog(L_ERR, "Failed expanding string at: %s",
-				       right);
 				return FALSE;
 			}
 		}

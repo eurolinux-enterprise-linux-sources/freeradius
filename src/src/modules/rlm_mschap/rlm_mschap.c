@@ -136,6 +136,7 @@ typedef struct rlm_mschap_t {
 	char *passwd_file;
 	const char *xlat_name;
 	char *ntlm_auth;
+	int ntlm_auth_timeout;
 	const char *auth_type;
 	int allow_retry;
 	char *retry_msg;
@@ -535,6 +536,8 @@ static const CONF_PARSER module_config[] = {
 	  offsetof(rlm_mschap_t, passwd_file), NULL,  NULL },
 	{ "ntlm_auth",   PW_TYPE_STRING_PTR,
 	  offsetof(rlm_mschap_t, ntlm_auth), NULL,  NULL },
+	{ "ntlm_auth_timeout",   PW_TYPE_INTEGER,
+	  offsetof(rlm_mschap_t, ntlm_auth_timeout), NULL,  NULL },
 	{ "allow_retry",   PW_TYPE_BOOLEAN,
 	  offsetof(rlm_mschap_t, allow_retry), NULL,  "yes" },
 	{ "retry_msg",   PW_TYPE_STRING_PTR,
@@ -554,7 +557,7 @@ static const CONF_PARSER module_config[] = {
 static int mschap_detach(void *instance){
 #define inst ((rlm_mschap_t *)instance)
 	if (inst->xlat_name) {
-		xlat_unregister(inst->xlat_name, mschap_xlat);
+		xlat_unregister(inst->xlat_name, mschap_xlat, instance);
 		free(inst->xlat_name);
 	}
 	free(instance);
@@ -608,6 +611,23 @@ static int mschap_instantiate(CONF_SECTION *conf, void **instance)
 		inst->auth_type = "MS-CHAP";
 	} else {
 		inst->auth_type = inst->xlat_name;
+	}
+
+	/*
+	 *	Check ntlm_auth_timeout is sane
+	 */
+	if (!inst->ntlm_auth_timeout) {
+		inst->ntlm_auth_timeout = EXEC_TIMEOUT;
+	}
+	if (inst->ntlm_auth_timeout < 1) {
+		radlog(L_ERR, "rlm_mschap: ntml_auth_timeout '%d' is too small (minimum: 1)",
+			      inst->ntlm_auth_timeout);
+		return -1;
+	}
+	if (inst->ntlm_auth_timeout > 10) {
+		radlog(L_ERR, "rlm_mschap: ntlm_auth_timeout '%d' is too large (maximum: 10)",
+			      inst->ntlm_auth_timeout);
+		return -1;
 	}
 
 	return 0;
@@ -704,6 +724,7 @@ static int do_mschap(rlm_mschap_t *inst,
 		result = radius_exec_program(inst->ntlm_auth, request,
 					     TRUE, /* wait */
 					     buffer, sizeof(buffer),
+					     inst->ntlm_auth_timeout,
 					     NULL, NULL, 1);
 		if (result != 0) {
 			char *p;
@@ -1116,11 +1137,11 @@ static int mschap_authenticate(void * instance, REQUEST *request)
 		 *	response
 		 */
 		if (response->vp_octets[1] & 0x01) {
-			RDEBUG2("Told to do MS-CHAPv1 with NT-Password");
+			RDEBUG2("Client is using MS-CHAPv1 with NT-Password");
 			password = nt_password;
 			offset = 26;
 		} else {
-			RDEBUG2("Told to do MS-CHAPv1 with LM-Password");
+			RDEBUG2("Client is using MS-CHAPv1 with LM-Password");
 			password = lm_password;
 			offset = 2;
 		}
@@ -1196,11 +1217,21 @@ static int mschap_authenticate(void * instance, REQUEST *request)
 			username_string = name_attr->vp_strvalue;
 		}
 		
+		/*
+		 *	When the names are ASCII, they should be
+		 *	identical.  When the names are non-ASCII,
+		 *	User-Name is UTF-8, and MS-CHAP-User-Name is
+		 *	some local Windows character set.  So they
+		 *	can't be identical.  And because you don't
+		 *	know what the MS-CHAP character set is,
+		 *	there's no way to do ANY kind of comparison.
+		 *	They could be "bob" and "doug", and you'd have
+		 *	no idea.
+		 */
 		if (response_name &&
 		    ((username->length != response_name->length) ||
 		     (strncasecmp(username->vp_strvalue, response_name->vp_strvalue, username->length) != 0))) {
-			RDEBUG("ERROR: User-Name (%s) is not the same as MS-CHAP Name (%s) from EAP-MSCHAPv2", username->vp_strvalue, response_name->vp_strvalue);
-			return RLM_MODULE_REJECT;
+			RDEBUG("WARNING: User-Name (%s) is not the same as MS-CHAP Name (%s) from EAP-MSCHAPv2", username->vp_strvalue, response_name->vp_strvalue);
 		}
 
 #ifdef __APPLE__
@@ -1234,7 +1265,7 @@ static int mschap_authenticate(void * instance, REQUEST *request)
 			       username_string,	/* user name */
 			       mschapv1_challenge); /* resulting challenge */
 
-		RDEBUG2("Told to do MS-CHAPv2 for %s with NT-Password",
+		RDEBUG2("Client is using MS-CHAPv2 for %s, we need NT-Password",
 		       username_string);
 
 		if (do_mschap(inst, request, nt_password, mschapv1_challenge,
@@ -1256,7 +1287,7 @@ static int mschap_authenticate(void * instance, REQUEST *request)
 						 sizeof(buffer) - 12 - i*2, "%02x",
 						 fr_rand() & 0xff);
 				}
-				snprintf(buffer + 12 + 32, sizeof(buffer) - 45,
+				snprintf(buffer + 44, sizeof(buffer) - 44,
 					 " V=3 M=%s", inst->retry_msg);
 			}
 			mschap_add_reply(request, &request->reply->vps,

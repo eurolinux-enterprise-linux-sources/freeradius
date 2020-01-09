@@ -153,10 +153,17 @@ int eaptls_success(EAP_HANDLER *handler, int peap_flag)
 		
 		vp = paircopy2(request->packet->vps, PW_STRIPPED_USER_NAME);
 		if (vp) pairadd(&vps, vp);
+
+		vp = paircopy2(request->reply->vps, PW_CHARGEABLE_USER_IDENTITY);
+		if (vp) pairadd(&vps, vp);
 		
 		vp = paircopy2(request->reply->vps, PW_CACHED_SESSION_POLICY);
 		if (vp) pairadd(&vps, vp);
-		
+
+		if (handler->certs) {
+			pairadd(&vps, paircopy(handler->certs));
+		}
+
 		if (vps) {
 			SSL_SESSION_set_ex_data(tls_session->ssl->session,
 						eaptls_session_idx, vps);
@@ -172,15 +179,29 @@ int eaptls_success(EAP_HANDLER *handler, int peap_flag)
 		 */
 	} else {
 	       
-		vp = SSL_SESSION_get_ex_data(tls_session->ssl->session,
+		vps = SSL_SESSION_get_ex_data(tls_session->ssl->session,
 					     eaptls_session_idx);
-		if (!vp) {
+		if (!vps) {
 			RDEBUG("WARNING: No information in cached session!");
 			return eaptls_fail(handler, peap_flag);
 		} else {
-			RDEBUG("Adding cached attributes to the reply:");
-			debug_pair_list(vp);
-			pairadd(&request->reply->vps, paircopy(vp));
+			RDEBUG("Adding cached attributes:");
+			debug_pair_list(vps);
+
+			for (vp = vps; vp != NULL; vp = vp->next) {
+				/*
+				 *	TLS-* attrs get added back to
+				 *	the request list.
+				 */
+				if ((vp->attribute >= 1910) &&
+				    (vp->attribute < 1929)) {
+					pairadd(&request->packet->vps,
+						paircopyvp(vp));
+				} else {
+					pairadd(&request->reply->vps,
+						paircopyvp(vp));
+				}
+			}
 
 			/*
 			 *	Mark the request as resumed.
@@ -205,6 +226,8 @@ int eaptls_success(EAP_HANDLER *handler, int peap_flag)
 		RDEBUG("WARNING: Not adding MPPE keys because there is no PRF label");
 	}
 
+	eaptls_gen_eap_key(tls_session->ssl,
+			   handler->eap_type, &handler->request->reply->vps);
 	return 1;
 }
 
@@ -767,7 +790,7 @@ static eaptls_status_t eaptls_operation(eaptls_status_t status,
 	 */
 	if (!tls_handshake_recv(handler->request, tls_session)) {
 		DEBUG2("TLS receive handshake failed during operation");
-		eaptls_fail(handler, tls_session->peap_flag);
+		SSL_CTX_remove_session(tls_session->ctx, tls_session->ssl->session);
 		return EAPTLS_FAIL;
 	}
 

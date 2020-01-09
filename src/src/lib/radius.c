@@ -67,6 +67,7 @@ typedef struct radius_packet_t {
 static fr_randctx fr_rand_pool;	/* across multiple calls */
 static int fr_rand_initialized = 0;
 static unsigned int salt_offset = 0;
+static uint8_t nullvector[AUTH_VECTOR_LEN] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; /* for CoA decode */
 
 const char *fr_packet_codes[FR_MAX_PACKET_CODE] = {
   "",
@@ -249,7 +250,9 @@ static int rad_sendto(int sockfd, void *data, size_t data_len, int flags,
 	 */
 	rcode = sendto(sockfd, data, data_len, flags,
 		       (struct sockaddr *) &dst, sizeof_dst);
+#ifdef WITH_UDPFROMTO
 done:
+#endif
 	if (rcode < 0) {
 		DEBUG("rad_send() failed: %s\n", strerror(errno));
 	}
@@ -511,7 +514,7 @@ static void make_passwd(uint8_t *output, size_t *outlen,
 	if (len > MAX_PASS_LEN) len = MAX_PASS_LEN;
 
 	memcpy(passwd, input, len);
-	memset(passwd + len, 0, sizeof(passwd) - len);
+	if (len < sizeof(passwd)) memset(passwd + len, 0, sizeof(passwd) - len);
 
 	if (len == 0) {
 		len = AUTH_PASS_LEN;
@@ -737,7 +740,7 @@ static uint8_t *vp2data(const RADIUS_PACKET *packet,
 	 *	Attributes with encrypted values MUST be less than
 	 *	128 bytes long.
 	 */
-	switch (vp->flags.encrypt) {
+	if (packet) switch (vp->flags.encrypt) {
 	case FLAG_ENCRYPT_USER_PASSWORD:
 		make_passwd(ptr, &len, data, len,
 			    secret, packet->vector);
@@ -779,6 +782,10 @@ static uint8_t *vp2data(const RADIUS_PACKET *packet,
 		 *	always fits.
 		 */
 	case FLAG_ENCRYPT_ASCEND_SECRET:
+#ifndef NDEBUG
+		if (data == array) return NULL;
+#endif
+		if (len != AUTH_VECTOR_LEN) return NULL;
 		make_secret(ptr, packet->vector, secret, data);
 		len = AUTH_VECTOR_LEN;
 		break;
@@ -790,7 +797,10 @@ static uint8_t *vp2data(const RADIUS_PACKET *packet,
 		 */
 		memcpy(ptr, data, len);
 		break;
-	} /* switch over encryption flags */
+
+        } else { 		/* no packet */
+		memcpy(ptr, data, len);
+	}
 
 	return ptr + len;
 }
@@ -820,7 +830,7 @@ static VALUE_PAIR *rad_vp2tlv(VALUE_PAIR *vps)
 		    vp->flags.encoded ||
 		    (vp->flags.encrypt != FLAG_ENCRYPT_NONE) ||
 		    ((vp->attribute & 0xffff00ff) != attribute) ||
-		    ((vp->attribute & 0x0000ff00) <= maxattr)) {
+		    ((vp->attribute & 0x0000ff00) < maxattr)) {
 			break;
 		}
 
@@ -846,7 +856,7 @@ static VALUE_PAIR *rad_vp2tlv(VALUE_PAIR *vps)
 		    vp->flags.encoded ||
 		    (vp->flags.encrypt != FLAG_ENCRYPT_NONE) ||
 		    ((vp->attribute & 0xffff00ff) != attribute) ||
-		    ((vp->attribute & 0x0000ff00) <= maxattr)) {
+		    ((vp->attribute & 0x0000ff00) < maxattr)) {
 			break;
 		}
 
@@ -859,7 +869,10 @@ static VALUE_PAIR *rad_vp2tlv(VALUE_PAIR *vps)
 		}
 
 		length = (end - ptr);
-		if (length > 255) return NULL;
+		if (length > 255) {
+			pairfree(&tlv);
+			return NULL;
+		}
 
 		/*
 		 *	Pack the attribute.
@@ -963,7 +976,7 @@ int rad_vp2attr(const RADIUS_PACKET *packet, const RADIUS_PACKET *original,
 
 	ptr = start;
 	end = ptr + 255;
-	vendorcode = total_length = 0;
+	total_length = 0;
 	length_ptr = vsa_length_ptr = tlv_length_ptr = NULL;
 
 	/*
@@ -1123,7 +1136,6 @@ int rad_vp2attr(const RADIUS_PACKET *packet, const RADIUS_PACKET *original,
 	*length_ptr += len;
 	if (vsa_length_ptr) *vsa_length_ptr += len;
 	if (tlv_length_ptr) *tlv_length_ptr += len;
-	ptr += len;
 	total_length += len;
 
 	return total_length;	/* of attribute */
@@ -1399,7 +1411,7 @@ int rad_sign(RADIUS_PACKET *packet, const RADIUS_PACKET *original,
 
 		/*
 		 *	Set the authentication vector to zero,
-		 *	calculate the signature, and put it
+		 *	calculate the HMAC, and put it
 		 *	into the Message-Authenticator
 		 *	attribute.
 		 */
@@ -1545,7 +1557,7 @@ int rad_digest_cmp(const uint8_t *a, const uint8_t *b, size_t length)
 
 /*
  *	Validates the requesting client NAS.  Calculates the
- *	signature based on the clients private key.
+ *	Request Authenticator based on the clients private key.
  */
 static int calc_acctdigest(RADIUS_PACKET *packet, const char *secret)
 {
@@ -1578,7 +1590,7 @@ static int calc_acctdigest(RADIUS_PACKET *packet, const char *secret)
 
 /*
  *	Validates the requesting client NAS.  Calculates the
- *	signature based on the clients private key.
+ *	Response Authenticator based on the clients private key.
  */
 static int calc_replydigest(RADIUS_PACKET *packet, RADIUS_PACKET *original,
 			    const char *secret)
@@ -2041,7 +2053,8 @@ RADIUS_PACKET *rad_recv(int fd, int flags)
 
 
 /*
- *	Verify the signature of a packet.
+ *	Verify the Request/Response Authenticator
+ *	(and Message-Authenticator if present) of a packet.
  */
 int rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original,
 	       const char *secret)
@@ -2088,11 +2101,7 @@ int rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original,
 
 			case PW_ACCOUNTING_REQUEST:
 			case PW_DISCONNECT_REQUEST:
-			case PW_DISCONNECT_ACK:
-			case PW_DISCONNECT_NAK:
 			case PW_COA_REQUEST:
-			case PW_COA_ACK:
-			case PW_COA_NAK:
 			  	memset(packet->data + 4, 0, AUTH_VECTOR_LEN);
 				break;
 
@@ -2100,6 +2109,10 @@ int rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original,
 			case PW_AUTHENTICATION_ACK:
 			case PW_AUTHENTICATION_REJECT:
 			case PW_ACCESS_CHALLENGE:
+			case PW_DISCONNECT_ACK:
+			case PW_DISCONNECT_NAK:
+			case PW_COA_ACK:
+			case PW_COA_NAK:
 				if (!original) {
 					fr_strerror_printf("ERROR: Cannot validate Message-Authenticator in response packet without a request packet.");
 					return -1;
@@ -2135,13 +2148,13 @@ int rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original,
 	} /* loop over the packet, sanity checking the attributes */
 
 	/*
-	 *	It looks like a RADIUS packet, but we can't validate
-	 *	the signature.
+	 *	It looks like a RADIUS packet, but we don't know what it is
+	 *	so can't validate the authenticators.
 	 */
 	if ((packet->code == 0) || (packet->code >= FR_MAX_PACKET_CODE)) {
 		char buffer[32];
 		fr_strerror_printf("Received Unknown packet code %d "
-			   "from client %s port %d: Cannot validate signature.",
+			   "from client %s port %d: Cannot validate Request/Response Authenticator.",
 			   packet->code,
 			   inet_ntop(packet->src_ipaddr.af,
 				     &packet->src_ipaddr.ipaddr,
@@ -2151,7 +2164,7 @@ int rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original,
 	}
 
 	/*
-	 *	Calculate and/or verify digest.
+	 *	Calculate and/or verify Request or Response Authenticator.
 	 */
 	switch(packet->code) {
 		int rcode;
@@ -2170,7 +2183,7 @@ int rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original,
 		case PW_ACCOUNTING_REQUEST:
 			if (calc_acctdigest(packet, secret) > 1) {
 				fr_strerror_printf("Received %s packet "
-					   "from client %s with invalid signature!  (Shared secret is incorrect.)",
+					   "from client %s with invalid Request Authenticator!  (Shared secret is incorrect.)",
 					   fr_packet_codes[packet->code],
 					   inet_ntop(packet->src_ipaddr.af,
 						     &packet->src_ipaddr.ipaddr,
@@ -2191,7 +2204,7 @@ int rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original,
 			rcode = calc_replydigest(packet, original, secret);
 			if (rcode > 1) {
 				fr_strerror_printf("Received %s packet "
-					   "from home server %s port %d with invalid signature!  (Shared secret is incorrect.)",
+					   "from home server %s port %d with invalid Response Authenticator!  (Shared secret is incorrect.)",
 					   fr_packet_codes[packet->code],
 					   inet_ntop(packet->src_ipaddr.af,
 						     &packet->src_ipaddr.ipaddr,
@@ -2203,7 +2216,7 @@ int rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original,
 
 		default:
 			fr_strerror_printf("Received Unknown packet code %d "
-				   "from client %s port %d: Cannot validate signature",
+				   "from client %s port %d: Cannot validate Request/Response Authenticator",
 				   packet->code,
 				   inet_ntop(packet->src_ipaddr.af,
 					     &packet->src_ipaddr.ipaddr,
@@ -2284,12 +2297,9 @@ static VALUE_PAIR *data2vp(const RADIUS_PACKET *packet,
 		 *	in response packets.
 		 */
 	case FLAG_ENCRYPT_TUNNEL_PASSWORD:
-		if (!original) goto raw;
-
-		if (rad_tunnel_pwdecode(vp->vp_octets, &vp->length,
-					secret, original->vector) < 0) {
+		if (rad_tunnel_pwdecode(vp->vp_octets, &vp->length, secret,
+					original ? original->vector : nullvector) < 0)
 			goto raw;
-		}
 		break;
 
 		/*
@@ -2653,7 +2663,10 @@ static VALUE_PAIR *rad_continuation2vp(const RADIUS_PACKET *packet,
 		}
 		
 		vp = paircreate(attribute, PW_TYPE_OCTETS);
-		if (!vp) return NULL;
+		if (!vp) {
+			free(tlv_data);
+			return NULL;
+		}
 			
 		vp->type = PW_TYPE_TLV;
 		vp->flags.encrypt = FLAG_ENCRYPT_NONE;
@@ -2711,7 +2724,7 @@ static VALUE_PAIR *rad_continuation2vp(const RADIUS_PACKET *packet,
 	 */
 	if (tlv_data != data) free(tlv_data);
 
-	if (head->next) rad_sortvp(&head);
+	if (head && head->next) rad_sortvp(&head);
 
 	return head;
 }
@@ -2732,6 +2745,69 @@ VALUE_PAIR *rad_attr2vp(const RADIUS_PACKET *packet, const RADIUS_PACKET *origin
 	return data2vp(packet, original, secret, attribute, length, data, vp);
 }
 
+/**
+ * 	Converts vp_data to network byte order
+ * 	Returns:
+ *		-1 on error, or the length of the value
+ */
+ssize_t rad_vp2data(const VALUE_PAIR *vp, uint8_t *out, size_t outlen)
+{
+	size_t		len = 0;
+	uint32_t	lvalue;
+
+	len = vp->length;
+	if (outlen < len) {
+		fr_strerror_printf("ERROR: rad_vp2data buffer passed too small");
+		return -1;
+	}
+	
+	switch(vp->type) {
+		case PW_TYPE_STRING:
+		case PW_TYPE_OCTETS:
+		case PW_TYPE_IFID:
+		case PW_TYPE_IPADDR:
+		case PW_TYPE_IPV6ADDR:
+		case PW_TYPE_IPV6PREFIX:
+		case PW_TYPE_ABINARY:
+		case PW_TYPE_TLV:
+			memcpy(out, vp->vp_octets, len);
+			break;
+		case PW_TYPE_BYTE:
+			out[0] = vp->vp_integer & 0xff;
+			break;
+	
+		case PW_TYPE_SHORT:
+			out[0] = (vp->vp_integer >> 8) & 0xff;
+			out[1] = vp->vp_integer & 0xff;
+			break;
+	
+		case PW_TYPE_INTEGER:
+			lvalue = htonl(vp->vp_integer);
+			memcpy(out, &lvalue, sizeof(lvalue));
+			break;
+
+		case PW_TYPE_DATE:
+			lvalue = htonl(vp->vp_date);
+			memcpy(out, &lvalue, sizeof(lvalue));
+			break;
+	
+		case PW_TYPE_SIGNED:
+		{
+			int32_t slvalue;
+			
+			slvalue = htonl(vp->vp_signed);
+			memcpy(out, &slvalue, sizeof(slvalue));
+			break;
+		}
+		/* unknown type: ignore it */
+		default:		
+			fr_strerror_printf("ERROR: Unknown attribute type %d",
+					   vp->type);
+			return -1;
+	}
+	
+	return len;
+}
 
 /*
  *	Calculate/check digest, and decode radius attributes.
@@ -3466,7 +3542,7 @@ int rad_chap_encode(RADIUS_PACKET *packet, uint8_t *output, int id,
 
 	/*
 	 *	Use Chap-Challenge pair if present,
-	 *	Request-Authenticator otherwise.
+	 *	Request Authenticator otherwise.
 	 */
 	challenge = pairfind(packet->vps, PW_CHAP_CHALLENGE);
 	if (challenge) {

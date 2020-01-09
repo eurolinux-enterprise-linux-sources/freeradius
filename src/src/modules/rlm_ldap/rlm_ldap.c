@@ -116,6 +116,7 @@ typedef struct ldap_conn {
 	char		bound;
 	char		locked;
 	int		failed_conns;
+	int		uses;
 #ifdef HAVE_PTHREAD_H
 	pthread_mutex_t	mutex;
 #endif
@@ -125,6 +126,7 @@ typedef struct {
 	char           *server;
 	int             port;
 	int             timelimit;
+	int		max_uses;
 	int  		net_timeout;
 	int		timeout;
 	int             debug;
@@ -138,6 +140,7 @@ typedef struct {
 	int		is_url;
 	int		chase_referrals;
 	int		rebind;
+	int		expect_password;
 	char           *login;
 	char           *password;
 	char           *filter;
@@ -233,6 +236,8 @@ static const CONF_PARSER module_config[] = {
 	 offsetof(ldap_instance,port), NULL, "389"},
 	{"password", PW_TYPE_STRING_PTR,
 	 offsetof(ldap_instance,password), NULL, ""},
+	{"expect_password", PW_TYPE_BOOLEAN,
+	 offsetof(ldap_instance,expect_password), NULL, "yes"},
 	{"identity", PW_TYPE_STRING_PTR,
 	 offsetof(ldap_instance,login), NULL, ""},
 
@@ -248,6 +253,9 @@ static const CONF_PARSER module_config[] = {
 	/* allow server unlimited time for search (server-side limit) */
 	{"timelimit", PW_TYPE_INTEGER,
 	 offsetof(ldap_instance,timelimit), NULL, "20"},
+	/* how many times the connection can be used before being re-established */
+	{"max_uses", PW_TYPE_INTEGER,
+	 offsetof(ldap_instance,max_uses), NULL, "0"},
 
 	/*
 	 *	TLS configuration  The first few are here for backwards
@@ -276,7 +284,7 @@ static const CONF_PARSER module_config[] = {
 	 *	DN's and filters.
 	 */
 	{"basedn", PW_TYPE_STRING_PTR,
-	 offsetof(ldap_instance,basedn), NULL, "o=notexist"},
+	 offsetof(ldap_instance,basedn), NULL, NULL},
 	{"filter", PW_TYPE_STRING_PTR,
 	 offsetof(ldap_instance,filter), NULL, "(uid=%u)"},
 	{"base_filter", PW_TYPE_STRING_PTR,
@@ -382,6 +390,7 @@ static inline int ldap_get_conn(LDAP_CONN *conns,LDAP_CONN **ret,
 			}
 			/* found an unused connection */
 			*ret = &conns[i];
+			conns[i].uses++;
 			conns[i].locked = 1;
 			DEBUG("  [%s] ldap_get_conn: Got Id: %d",
 			      inst->xlat_name, i);
@@ -393,18 +402,28 @@ static inline int ldap_get_conn(LDAP_CONN *conns,LDAP_CONN **ret,
 }
 
 static inline void ldap_release_conn(int i, ldap_instance *inst)
-				     
+
 {
 	LDAP_CONN *conns = inst->conns;
 
 	DEBUG("  [%s] ldap_release_conn: Release Id: %d", inst->xlat_name, i);
+	if ((inst->max_uses > 0) && (conns[i].uses >= inst->max_uses)) {
+		if (conns[i].ld){
+			DEBUG("  [%s] ldap_release_conn: Hit max usage limit, closing Id: %d", inst->xlat_name, i);
+			ldap_unbind_s(conns[i].ld);
+
+			conns[i].ld = NULL;
+		}
+		conns[i].bound = 0;
+		conns[i].uses = 0;
+	}
 	conns[i].locked = 0;
 	pthread_mutex_unlock(&(conns[i].mutex));
 }
 
 #ifdef NOVELL
 static inline void ldap_release_apc_conn(int i, ldap_instance *inst)
-				     
+
 {
 	LDAP_CONN *conns = inst->apc_conns;
 
@@ -871,7 +890,7 @@ retry:
 
 	tv.tv_sec = inst->timeout;
 	tv.tv_usec = 0;
-	DEBUG2("  [%s] performing search in %s, with filter %s", inst->xlat_name, 
+	DEBUG2("  [%s] performing search in %s, with filter %s", inst->xlat_name,
 	       search_basedn ? search_basedn : "(null)" , filter);
 	switch (ldap_search_st(conn->ld, search_basedn, scope, filter,
 			       attrs, 0, &tv, result)) {
@@ -913,6 +932,11 @@ retry:
 		       ldap_err2string(ldap_errno));
 		ldap_msgfree(*result);
 		return (RLM_MODULE_FAIL);
+	case LDAP_OPERATIONS_ERROR:
+		DEBUG("WARNING: Please set 'chase_referrals=yes' and 'rebind=yes'");
+		DEBUG("WARNING: See the ldap module configuration for details");
+		/* FALL-THROUGH */
+
 	default:
 		ldap_get_option(conn->ld, LDAP_OPT_ERROR_NUMBER, &ldap_errno);
 		radlog(L_ERR, "  [%s] ldap_search() failed: %s", inst->xlat_name,
@@ -1009,11 +1033,12 @@ static int ldap_groupcmp(void *instance, REQUEST *req,
 	VALUE_PAIR	*vp_user_dn;
 	VALUE_PAIR      **request_pairs;
 
+	basedn[0] = '\0';
 	request_pairs = &req->config_items;
 
 	DEBUG("  [%s] Entering ldap_groupcmp()", inst->xlat_name);
 
-	if (check->vp_strvalue == NULL || check->length == 0){
+	if (check->length == 0){
                 DEBUG("rlm_ldap::ldap_groupcmp: Illegal group name");
                 return 1;
         }
@@ -1023,7 +1048,7 @@ static int ldap_groupcmp(void *instance, REQUEST *req,
                 return 1;
         }
 
-        if (!radius_xlat(basedn, sizeof(basedn), inst->basedn, req, ldap_escape_func)) {
+        if (inst->basedn && !radius_xlat(basedn, sizeof(basedn), inst->basedn, req, ldap_escape_func)) {
                 DEBUG("rlm_ldap::ldap_groupcmp: unable to create basedn.");
                 return 1;
         }
@@ -1223,7 +1248,7 @@ static size_t ldap_xlat(void *instance, REQUEST *request, char *fmt,
 	}
 	if (ldap_url->lud_attrs == NULL || ldap_url->lud_attrs[0] == NULL ||
 	    ( ldap_url->lud_attrs[1] != NULL ||
-	      ( ! strlen(ldap_url->lud_attrs[0]) ||
+	      ( !*ldap_url->lud_attrs[0] ||
 		! strcmp(ldap_url->lud_attrs[0],"*") ) ) ){
 		radlog (L_ERR, "  [%s] Invalid Attribute(s) request.\n", inst->xlat_name);
 		ldap_free_urldesc(ldap_url);
@@ -1296,6 +1321,7 @@ static const FR_NAME_NUMBER header_names[] = {
 	{ "{clear}",	PW_CLEARTEXT_PASSWORD },
 	{ "{cleartext}", PW_CLEARTEXT_PASSWORD },
 	{ "{md5}",	PW_MD5_PASSWORD },
+	{ "{BASE64_MD5}",	PW_MD5_PASSWORD },
 	{ "{smd5}",	PW_SMD5_PASSWORD },
 	{ "{crypt}",	PW_CRYPT_PASSWORD },
 	{ "{sha}",	PW_SHA_PASSWORD },
@@ -1337,6 +1363,8 @@ static int ldap_authorize(void *instance, REQUEST * request)
 	int		conn_id = -1;
 	int		added_known_password = 0;
 
+	basedn[0] = '\0';
+
 	if (!request->username){
 		RDEBUG2("Attribute \"User-Name\" is required for authorization.\n");
 		return RLM_MODULE_NOOP;
@@ -1348,7 +1376,7 @@ static int ldap_authorize(void *instance, REQUEST * request)
 	/*
 	 * Check for valid input, zero length names not permitted
 	 */
-	if (request->username->vp_strvalue == 0) {
+	if (request->username->length == 0) {
 		DEBUG2("zero length username not permitted\n");
 		return RLM_MODULE_INVALID;
 	}
@@ -1361,8 +1389,8 @@ static int ldap_authorize(void *instance, REQUEST * request)
 		return RLM_MODULE_INVALID;
 	}
 
-	if (!radius_xlat(basedn, sizeof(basedn), inst->basedn,
-			 request, ldap_escape_func)) {
+	if (inst->basedn && !radius_xlat(basedn, sizeof(basedn), inst->basedn,
+					 request, ldap_escape_func)) {
 		radlog(L_ERR, "  [%s] unable to create basedn.\n", inst->xlat_name);
 		return RLM_MODULE_INVALID;
 	}
@@ -1453,7 +1481,7 @@ static int ldap_authorize(void *instance, REQUEST * request)
 		strlcpy(filter,inst->base_filter,sizeof(filter));
 		if (user_profile)
 			profile = user_profile->vp_strvalue;
-		if (profile && strlen(profile)){
+		if (profile && *profile){
 			if ((res = perform_search(instance, conn,
 				profile, LDAP_SCOPE_BASE,
 				filter, inst->atts, &def_result)) == RLM_MODULE_OK){
@@ -1492,7 +1520,7 @@ static int ldap_authorize(void *instance, REQUEST * request)
 		if ((vals = ldap_get_values(conn->ld, msg, inst->profile_attr)) != NULL) {
 			unsigned int i=0;
 			strlcpy(filter,inst->base_filter,sizeof(filter));
-			while(vals[i] != NULL && strlen(vals[i])){
+			while(vals[i] && *vals[i]){
 				if ((res = perform_search(instance, conn,
 					vals[i], LDAP_SCOPE_BASE,
 					filter, inst->atts, &def_attr_result)) == RLM_MODULE_OK){
@@ -1522,7 +1550,7 @@ static int ldap_authorize(void *instance, REQUEST * request)
 			ldap_value_free(vals);
 		}
 	}
-	if (inst->passwd_attr && strlen(inst->passwd_attr)) {
+	if (inst->passwd_attr && *inst->passwd_attr) {
 #ifdef NOVELL_UNIVERSAL_PASSWORD
 		if (strcasecmp(inst->passwd_attr,"nspmPassword") != 0) {
 #endif
@@ -1546,7 +1574,7 @@ static int ldap_authorize(void *instance, REQUEST * request)
 					      i++) {
 				int attr = PW_USER_PASSWORD;
 
-				if (strlen(passwd_vals[i]) == 0)
+				if (!*passwd_vals[i])
 					continue;
 
 				value = passwd_vals[i];
@@ -1569,7 +1597,7 @@ static int ldap_authorize(void *instance, REQUEST * request)
 					goto create_attr;
 
 				} else if (inst->passwd_hdr &&
-					   strlen(inst->passwd_hdr)) {
+					   *inst->passwd_hdr) {
 					if (strncasecmp(value,
 							inst->passwd_hdr,
 							strlen(inst->passwd_hdr)) == 0) {
@@ -1619,7 +1647,7 @@ static int ldap_authorize(void *instance, REQUEST * request)
 				if (res == 0){
 					passwd_val = universal_password;
 
-					if (inst->passwd_hdr && strlen(inst->passwd_hdr)){
+					if (inst->passwd_hdr && *inst->passwd_hdr){
 						passwd_val = strstr(passwd_val,inst->passwd_hdr);
 
 						if (passwd_val != NULL)
@@ -1761,13 +1789,14 @@ static int ldap_authorize(void *instance, REQUEST * request)
 
 		return RLM_MODULE_REJECT;
 	}
-       
+
        /*
 	*	More warning messages for people who can't be bothered
 	*	to read the documentation.
 	*/
-       if (debug_flag > 1) {
+       if (inst->expect_password && (debug_flag > 1)) {
 	       if (!pairfind(request->config_items, PW_CLEARTEXT_PASSWORD) &&
+		   !pairfind(request->config_items, PW_NT_PASSWORD) &&
 		   !pairfind(request->config_items, PW_USER_PASSWORD) &&
 		   !pairfind(request->config_items, PW_PASSWORD_WITH_HEADER) &&
 		   !pairfind(request->config_items, PW_CRYPT_PASSWORD)) {
@@ -1790,8 +1819,9 @@ static int ldap_authorize(void *instance, REQUEST * request)
 		RDEBUG("Setting Auth-Type = %s", inst->auth_type);
 	}
 
-	RDEBUG("user %s authorized to use remote access",
-	      request->username->vp_strvalue);
+	if (inst->access_attr)
+		RDEBUG("user %s authorized to use remote access",
+		       request->username->vp_strvalue);
 	ldap_msgfree(result);
 	ldap_release_conn(conn_id,inst);
 
@@ -1822,6 +1852,7 @@ static int ldap_authenticate(void *instance, REQUEST * request)
 #ifdef NOVELL
 	char		*err = NULL;
 #endif
+	basedn[0] = '\0';
 
 	/*
 	 * Ensure that we're being passed a plain-text password, and not
@@ -1876,8 +1907,8 @@ static int ldap_authenticate(void *instance, REQUEST * request)
 			return RLM_MODULE_INVALID;
 		}
 
-		if (!radius_xlat(basedn, sizeof(basedn), inst->basedn,
-		 		request, ldap_escape_func)) {
+		if (inst->basedn && !radius_xlat(basedn, sizeof(basedn), inst->basedn,
+						 request, ldap_escape_func)) {
 			radlog(L_ERR, "  [%s] unable to create basedn.\n", inst->xlat_name);
 			return RLM_MODULE_INVALID;
 		}
@@ -2146,8 +2177,8 @@ static int ldap_postauth(void *instance, REQUEST * request)
 				if (request->reply->code == PW_AUTHENTICATION_REJECT) {
 				  /* Bind to eDirectory as the RADIUS user with a wrong password. */
 				  vp_pwd = pairfind(request->config_items, PW_CLEARTEXT_PASSWORD);
-				  strcpy(password, vp_pwd->vp_strvalue);
-				  if (strlen(password) > 0) {
+				  if (vp_pwd && *vp_pwd->vp_strvalue) {
+				  	  strcpy(password, vp_pwd->vp_strvalue);
 					  if (password[0] != 'a') {
 						  password[0] = 'a';
 					  } else {
@@ -2290,7 +2321,7 @@ static LDAP *ldap_connect(void *instance, const char *dn, const char *password,
 		if (inst->chase_referrals) {
 			rc=ldap_set_option(ld, LDAP_OPT_REFERRALS,
 					   LDAP_OPT_ON);
-			
+
 #if LDAP_SET_REBIND_PROC_ARGS == 3
 			if (inst->rebind == 1) {
 				ldap_set_rebind_proc(ld, ldap_rebind,
@@ -2368,7 +2399,7 @@ static LDAP *ldap_connect(void *instance, const char *dn, const char *password,
 			ldap_get_option(ld, LDAP_OPT_ERROR_NUMBER, &ldap_errno);
 			radlog(L_ERR, "  [%s] could not set "
 			       "LDAP_OPT_X_TLS_CACERTFILE option to %s: %s",
-			       inst->xlat_name, 
+			       inst->xlat_name,
 			       inst->tls_cacertfile,
 			       ldap_err2string(ldap_errno));
 		}
@@ -2383,7 +2414,7 @@ static LDAP *ldap_connect(void *instance, const char *dn, const char *password,
 			ldap_get_option(ld, LDAP_OPT_ERROR_NUMBER, &ldap_errno);
 			radlog(L_ERR, "  [%s] could not set "
 			       "LDAP_OPT_X_TLS_CACERTDIR option to %s: %s",
-			       inst->xlat_name, 
+			       inst->xlat_name,
 			       inst->tls_cacertdir,
 			       ldap_err2string(ldap_errno));
 		}
@@ -2399,9 +2430,9 @@ static LDAP *ldap_connect(void *instance, const char *dn, const char *password,
 	if (ldap_int_tls_config(NULL, LDAP_OPT_X_TLS_REQUIRE_CERT,
 				(inst->tls_require_cert)) != LDAP_OPT_SUCCESS) {
 		ldap_get_option(ld, LDAP_OPT_ERROR_NUMBER, &ldap_errno);
-		radlog(L_ERR, "  [%s] could not set ", 
+		radlog(L_ERR, "  [%s] could not set ",
 		       "LDAP_OPT_X_TLS_REQUIRE_CERT option to %s: %s",
-		       inst->xlat_name, 
+		       inst->xlat_name,
 		       inst->tls_require_cert,
 		       ldap_err2string(ldap_errno));
 	}
@@ -2416,7 +2447,7 @@ static LDAP *ldap_connect(void *instance, const char *dn, const char *password,
 			ldap_get_option(ld, LDAP_OPT_ERROR_NUMBER, &ldap_errno);
 			radlog(L_ERR, "  [%s] could not set "
 			       "LDAP_OPT_X_TLS_CERTFILE option to %s: %s",
-			       inst->xlat_name, 
+			       inst->xlat_name,
 			       inst->tls_certfile,
 			       ldap_err2string(ldap_errno));
 		}
@@ -2432,13 +2463,13 @@ static LDAP *ldap_connect(void *instance, const char *dn, const char *password,
 			ldap_get_option(ld, LDAP_OPT_ERROR_NUMBER, &ldap_errno);
 			radlog(L_ERR, "  [%s] could not set "
 			       "LDAP_OPT_X_TLS_KEYFILE option to %s: %s",
-			       inst->xlat_name, 
+			       inst->xlat_name,
 			       inst->tls_keyfile, ldap_err2string(ldap_errno));
 		}
 	}
 
 	if (inst->tls_randfile != NULL) {
-		DEBUG("  [%s] setting TLS Key File to %s", inst->xlat_name,
+		DEBUG("  [%s] setting TLS Rand File to %s", inst->xlat_name,
 		      inst->tls_randfile);
 
 		if (ldap_set_option(NULL, LDAP_OPT_X_TLS_RANDOM_FILE,
@@ -2584,6 +2615,8 @@ ldap_detach(void *instance)
 		int i;
 
 		for (i = 0;i < inst->num_conns; i++) {
+			if (inst->conns[i].locked) return -1;
+
 			if (inst->conns[i].ld){
 				ldap_unbind_s(inst->conns[i].ld);
 			}
@@ -2597,6 +2630,8 @@ ldap_detach(void *instance)
 		int i;
 
 		for (i = 0; i < inst->num_conns; i++) {
+			if (inst->apc_conns[i].locked) return -1;
+
 			if (inst->apc_conns[i].ld){
 				ldap_unbind_s(inst->apc_conns[i].ld);
 			}
@@ -2630,7 +2665,7 @@ ldap_detach(void *instance)
 		free(inst->atts);
 
 	paircompare_unregister(PW_LDAP_GROUP, ldap_groupcmp);
-	xlat_unregister(inst->xlat_name,ldap_xlat);
+	xlat_unregister(inst->xlat_name,ldap_xlat, instance);
 	free(inst->xlat_name);
 
 	free(inst);

@@ -405,7 +405,7 @@ static int mschapv2_authenticate(void *arg, EAP_HANDLER *handler)
 	/*
 	 *	Sanity check the response.
 	 */
-	if (eap_ds->response->length <= 4) {
+	if (eap_ds->response->length <= 5) {
 		radlog(L_ERR, "rlm_eap_mschapv2: corrupted data");
 		return 0;
 	}
@@ -442,6 +442,8 @@ static int mschapv2_authenticate(void *arg, EAP_HANDLER *handler)
 		 *	a challenge.
 		 */
 	case PW_EAP_MSCHAPV2_RESPONSE:
+		if (data->code == PW_EAP_MSCHAPV2_FAILURE) goto failure;
+
 		if (data->code != PW_EAP_MSCHAPV2_CHALLENGE) {
 			radlog(L_ERR, "rlm_eap_mschapv2: Unexpected response received");
 			return 0;
@@ -514,6 +516,7 @@ static int mschapv2_authenticate(void *arg, EAP_HANDLER *handler)
 			return 0;
 		}
 
+	failure:
                 handler->request->options &= ~RAD_REQUEST_OPTION_PROXY_EAP;
                 eap_ds->request->code = PW_EAP_FAILURE;
                 return 1;
@@ -557,11 +560,11 @@ static int mschapv2_authenticate(void *arg, EAP_HANDLER *handler)
 	response->vp_strvalue[0] = eap_ds->response->type.data[1];
 	response->vp_strvalue[1] = eap_ds->response->type.data[5 + MSCHAPV2_RESPONSE_LEN];
 
-	name = pairmake("NTLM-User-Name", "", T_OP_EQ);
+	name = pairmake("MS-CHAP-User-Name", "", T_OP_EQ);
 	if (!name) {
 		pairfree(&challenge);
 		pairfree(&response);
-		radlog(L_ERR, "rlm_eap_mschapv2: Failed creating NTLM-User-Name: %s", fr_strerror());
+		radlog(L_ERR, "rlm_eap_mschapv2: Failed creating MS-CHAP-User-Name: %s", fr_strerror());
 		return 0;
 	}
 	

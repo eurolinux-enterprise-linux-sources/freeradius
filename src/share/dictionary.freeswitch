@@ -1,10 +1,11 @@
 # -*- text -*-
+# Copyright (C) 2011 The FreeRADIUS Server project and contributors
 #
 # dictionary.freeswitch
 #
 # cparker@segv.org
 #
-# Version:	$Id: $
+# Version:	$Id$
 #
 
 VENDOR		Freeswitch			27880

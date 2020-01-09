@@ -243,16 +243,26 @@ done:
 		      state[4], state[5],
 		      state[6], state[7]);
 
-		DEBUG("WARNING: !! Please read http://wiki.freeradius.org/Certificate_Compatibility");
+		DEBUG("WARNING: !! Please read http://wiki.freeradius.org/guide/Certificate_Compatibility");
 		DEBUG("WARNING: !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
 	}
 }
 
 void eaptype_free(EAP_TYPES *i)
 {
+	cf_section_parse_free(i->cs, i->type_data);
+
 	if (i->type->detach) (i->type->detach)(i->type_data);
 	i->type_data = NULL;
-	if (i->handle) lt_dlclose(i->handle);
+#ifndef NDEBUG
+	/*
+	 *	Don't dlclose() modules if we're doing memory
+	 *	debugging.  This removes the symbols needed by
+	 *	valgrind.
+	 */
+	if (!mainconfig.debug_memory)
+#endif
+	  if (i->handle) lt_dlclose(i->handle);
 	free(i);
 }
 

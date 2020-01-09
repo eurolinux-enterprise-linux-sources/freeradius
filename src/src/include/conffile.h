@@ -58,6 +58,7 @@ int		cf_section_parse(CONF_SECTION *, void *base,
 				 const CONF_PARSER *variables);
 void		cf_section_parse_free(CONF_SECTION *cs, void *base);
 const CONF_PARSER *cf_section_parse_table(CONF_SECTION *cs);
+int cf_exclude_file(const char *filename);
 CONF_SECTION	*cf_file_read(const char *file);
 int		cf_file_include(const char *file, CONF_SECTION *cs);
 
@@ -76,6 +77,7 @@ int cf_data_add(CONF_SECTION *, const char *, void *, void (*)(void *));
 
 const char *cf_pair_attr(CONF_PAIR *pair);
 const char *cf_pair_value(CONF_PAIR *pair);
+FR_TOKEN cf_pair_operator(CONF_PAIR *pair);
 VALUE_PAIR *cf_pairtovp(CONF_PAIR *pair);
 const char *cf_section_name1(const CONF_SECTION *);
 const char *cf_section_name2(const CONF_SECTION *);

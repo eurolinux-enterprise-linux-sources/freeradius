@@ -1,4 +1,5 @@
 # -*- text -*-
+# Copyright (C) 2011 The FreeRADIUS Server project and contributors
 #
 #	Non Protocol Attributes used by FreeRADIUS
 #
@@ -218,6 +219,15 @@ ATTRIBUTE	MS-CHAP-Password			1133	string
 ATTRIBUTE	Packet-Transmit-Counter			1134	integer
 ATTRIBUTE	Cached-Session-Policy			1135	string
 
+ATTRIBUTE	Cache-TTL				1140	integer
+ATTRIBUTE	Cache-Status-Only			1141	integer
+ATTRIBUTE	Cache-Entry-Hits			1142	integer
+
+VALUE	Cache-Status-Only		no			0
+VALUE	Cache-Status-Only		yes			1
+
+ATTRIBUTE	EAP-Session-Id				1146	octets
+
 #
 #	Range:	1200-1279
 #		EAP-SIM (and other EAP type) weirdness.
@@ -255,20 +265,68 @@ ATTRIBUTE	EAP-Sim-KC3				1214	octets
 #	Range:	1280 - 1535
 #		EAP-type specific attributes
 #
-
-# these are PW_EAP_X  + 1280
-ATTRIBUTE	EAP-Type-Identity			1281	string
-ATTRIBUTE	EAP-Type-Notification			1282	string
-ATTRIBUTE	EAP-Type-NAK				1283	string
-ATTRIBUTE	EAP-Type-MD5				1284	octets
-ATTRIBUTE	EAP-Type-OTP				1285	string
-ATTRIBUTE	EAP-Type-GTC				1286	string
-ATTRIBUTE	EAP-Type-TLS				1297	octets
+#		These are used mostly for radeapclient, and aren't
+#		that useful for anyone else.
+#
+#  egrep VALUE dictionary.freeradius.internal  | grep EAP-Type | awk '{print "ATTRIBUTE EAP-Type-" $3 " " 1280+$4 " octets"}' > foo;./format.pl foo
+#
+ATTRIBUTE	EAP-Type-VALUE				1280	octets
+ATTRIBUTE	EAP-Type-None				1280	octets
+ATTRIBUTE	EAP-Type-Identity			1281	octets
+ATTRIBUTE	EAP-Type-Notification			1282	octets
+ATTRIBUTE	EAP-Type-NAK				1283	octets
+ATTRIBUTE	EAP-Type-MD5-Challenge			1284	octets
+ATTRIBUTE	EAP-Type-One-Time-Password		1285	octets
+ATTRIBUTE	EAP-Type-Generic-Token-Card		1286	octets
+ATTRIBUTE	EAP-Type-RSA-Public-Key			1289	octets
+ATTRIBUTE	EAP-Type-DSS-Unilateral			1290	octets
+ATTRIBUTE	EAP-Type-KEA				1291	octets
+ATTRIBUTE	EAP-Type-KEA-Validate			1292	octets
+ATTRIBUTE	EAP-Type-EAP-TLS			1293	octets
+ATTRIBUTE	EAP-Type-Defender-Token			1294	octets
+ATTRIBUTE	EAP-Type-RSA-SecurID-EAP		1295	octets
+ATTRIBUTE	EAP-Type-Arcot-Systems-EAP		1296	octets
+ATTRIBUTE	EAP-Type-Cisco-LEAP			1297	octets
+ATTRIBUTE	EAP-Type-Nokia-IP-Smart-Card		1298	octets
 ATTRIBUTE	EAP-Type-SIM				1298	octets
-ATTRIBUTE	EAP-Type-LEAP				1301	octets
-ATTRIBUTE	EAP-Type-SIM2				1302	octets
-ATTRIBUTE	EAP-Type-TTLS				1305	octets
-ATTRIBUTE	EAP-Type-PEAP				1309	octets
+ATTRIBUTE	EAP-Type-SRP-SHA1			1299	octets
+ATTRIBUTE	EAP-Type-EAP-TTLS			1301	octets
+ATTRIBUTE	EAP-Type-Remote-Access-Service		1302	octets
+ATTRIBUTE	EAP-Type-AKA				1303	octets
+ATTRIBUTE	EAP-Type-EAP-3Com-Wireless		1304	octets
+ATTRIBUTE	EAP-Type-PEAP				1305	octets
+ATTRIBUTE	EAP-Type-MS-EAP-Authentication		1306	octets
+ATTRIBUTE	EAP-Type-MAKE				1307	octets
+ATTRIBUTE	EAP-Type-CRYPTOCard			1308	octets
+ATTRIBUTE	EAP-Type-EAP-MSCHAP-V2			1309	octets
+ATTRIBUTE	EAP-Type-DynamID			1310	octets
+ATTRIBUTE	EAP-Type-Rob-EAP			1311	octets
+ATTRIBUTE	EAP-Type-SecurID-EAP			1312	octets
+ATTRIBUTE	EAP-Type-MS-Authentication-TLV		1313	octets
+ATTRIBUTE	EAP-Type-SentriNET			1314	octets
+ATTRIBUTE	EAP-Type-EAP-Actiontec-Wireless		1315	octets
+ATTRIBUTE	EAP-Type-Cogent-Biomentric-EAP		1316	octets
+ATTRIBUTE	EAP-Type-AirFortress-EAP		1317	octets
+ATTRIBUTE	EAP-Type-EAP-HTTP-Digest		1318	octets
+ATTRIBUTE	EAP-Type-SecuriSuite-EAP		1319	octets
+ATTRIBUTE	EAP-Type-DeviceConnect-EAP		1320	octets
+ATTRIBUTE	EAP-Type-EAP-SPEKE			1321	octets
+ATTRIBUTE	EAP-Type-EAP-MOBAC			1322	octets
+ATTRIBUTE	EAP-Type-EAP-FAST			1323	octets
+ATTRIBUTE	EAP-Type-Zonelabs			1324	octets
+ATTRIBUTE	EAP-Type-EAP-Link			1325	octets
+ATTRIBUTE	EAP-Type-EAP-PAX			1326	octets
+ATTRIBUTE	EAP-Type-EAP-PSK			1327	octets
+ATTRIBUTE	EAP-Type-EAP-SAKE			1328	octets
+ATTRIBUTE	EAP-Type-EAP-IKEv2			1329	octets
+ATTRIBUTE	EAP-Type-EAP-AKA2			1330	octets
+ATTRIBUTE	EAP-Type-EAP-GPSK			1331	octets
+ATTRIBUTE	EAP-Type-EAP-PWD			1332	octets
+ATTRIBUTE	EAP-Type-EAP-EVEv1			1333	octets
+
+ATTRIBUTE	EAP-Type-Microsoft-MS-CHAPv2		1306	octets
+ATTRIBUTE	EAP-Type-Cisco-MS-CHAPv2		1309	octets
+ATTRIBUTE	EAP-Type-MS-CHAP-V2			1306	octets
 
 #
 #	Range:	1536 - 1791
@@ -333,6 +391,17 @@ ATTRIBUTE	Tmp-IP-Address-7			1827	ipaddr
 ATTRIBUTE	Tmp-IP-Address-8			1828	ipaddr
 ATTRIBUTE	Tmp-IP-Address-9			1829	ipaddr
 
+ATTRIBUTE	Tmp-Octets-0				1830	octets
+ATTRIBUTE	Tmp-Octets-1				1831	octets
+ATTRIBUTE	Tmp-Octets-2				1832	octets
+ATTRIBUTE	Tmp-Octets-3				1833	octets
+ATTRIBUTE	Tmp-Octets-4				1834	octets
+ATTRIBUTE	Tmp-Octets-5				1835	octets
+ATTRIBUTE	Tmp-Octets-6				1836	octets
+ATTRIBUTE	Tmp-Octets-7				1837	octets
+ATTRIBUTE	Tmp-Octets-8				1838	octets
+ATTRIBUTE	Tmp-Octets-9				1839	octets
+
 #	Range:	1900-1909
 #	WiMAX server-side attributes.
 #
@@ -343,21 +412,32 @@ ATTRIBUTE	Tmp-IP-Address-9			1829	ipaddr
 #
 ATTRIBUTE	WiMAX-MN-NAI				1900	string
 
+#	Range:  1910-1930
+#	Certificate attributes
+#
+#
 ATTRIBUTE	TLS-Cert-Serial				1910	string
 ATTRIBUTE	TLS-Cert-Expiration			1911	string
 ATTRIBUTE	TLS-Cert-Issuer				1912	string
 ATTRIBUTE	TLS-Cert-Subject			1913	string
 ATTRIBUTE	TLS-Cert-Common-Name			1914	string
-# 1915 - 1919: reserved for future cert attributes
+ATTRIBUTE	TLS-Cert-Subject-Alt-Name-Email		1915	string
+# 1916 - 1919: reserved for future cert attributes
 ATTRIBUTE	TLS-Client-Cert-Serial			1920	string
 ATTRIBUTE	TLS-Client-Cert-Expiration		1921	string
 ATTRIBUTE	TLS-Client-Cert-Issuer			1922	string
 ATTRIBUTE	TLS-Client-Cert-Subject			1923	string
 ATTRIBUTE	TLS-Client-Cert-Common-Name		1924	string
 ATTRIBUTE	TLS-Client-Cert-Filename		1925	string
+ATTRIBUTE	TLS-Client-Cert-Subject-Alt-Name-Email	1926	string
+ATTRIBUTE	TLS-Client-Cert-X509v3-Extended-Key-Usage 1927	string
+ATTRIBUTE	TLS-Client-Cert-X509v3-Subject-Key-Identifier 1928	string
+ATTRIBUTE	TLS-Client-Cert-X509v3-Authority-Key-Identifier 1929	string
+ATTRIBUTE	TLS-Client-Cert-X509v3-Basic-Constraints 1930	string
 
-#
-#	Range:	1910-2099
+# 1931 - 1939: reserved for future cert attributes
+
+#	Range:	1930-2099
 #		Free
 #
 #	Range:	2100-2199
@@ -366,7 +446,7 @@ ATTRIBUTE	TLS-Client-Cert-Filename		1925	string
 #	vendor? Sigh...
 #
 ATTRIBUTE	SoH-MS-Machine-OS-vendor		2100	integer
-VALUE		SoH-MS-Machine-OS-vendor	Microsoft	311
+VALUE	SoH-MS-Machine-OS-vendor	Microsoft		311
 
 ATTRIBUTE	SoH-MS-Machine-OS-version		2101	integer
 ATTRIBUTE	SoH-MS-Machine-OS-release		2102	integer
@@ -375,21 +455,20 @@ ATTRIBUTE	SoH-MS-Machine-SP-version		2104	integer
 ATTRIBUTE	SoH-MS-Machine-SP-release		2105	integer
 
 ATTRIBUTE	SoH-MS-Machine-Processor		2106	integer
-VALUE		SoH-MS-Machine-Processor	x86	0
-VALUE		SoH-MS-Machine-Processor	i64	6
-VALUE		SoH-MS-Machine-Processor	x86_64	9
+VALUE	SoH-MS-Machine-Processor	x86			0
+VALUE	SoH-MS-Machine-Processor	i64			6
+VALUE	SoH-MS-Machine-Processor	x86_64			9
 
 ATTRIBUTE	SoH-MS-Machine-Name			2107	string
 ATTRIBUTE	SoH-MS-Correlation-Id			2108	octets
 ATTRIBUTE	SoH-MS-Machine-Role			2109	integer
-VALUE		SoH-MS-Machine-Role		client	1
-VALUE		SoH-MS-Machine-Role		dc	2
-VALUE		SoH-MS-Machine-Role		server	3
-
+VALUE	SoH-MS-Machine-Role		client			1
+VALUE	SoH-MS-Machine-Role		dc			2
+VALUE	SoH-MS-Machine-Role		server			3
 
 ATTRIBUTE	SoH-Supported				2119	integer
-VALUE		SoH-Supported			no	0
-VALUE		SoH-Supported			yes	1
+VALUE	SoH-Supported			no			0
+VALUE	SoH-Supported			yes			1
 
 ATTRIBUTE	SoH-MS-Windows-Health-Status		2120	string
 ATTRIBUTE	SoH-MS-Health-Other			2129	string
@@ -570,11 +649,11 @@ VALUE	EAP-Type			Arcot-Systems-EAP	16
 VALUE	EAP-Type			Cisco-LEAP		17
 VALUE	EAP-Type			Nokia-IP-Smart-Card	18
 VALUE	EAP-Type			SIM			18
-VALUE	EAP-Type			SRP-SHA1-Part-1		19
-VALUE	EAP-Type			SRP-SHA1-Part-2		20
+VALUE	EAP-Type			SRP-SHA1		19
+# 20 is unassigned
 VALUE	EAP-Type			EAP-TTLS		21
 VALUE	EAP-Type			Remote-Access-Service	22
-VALUE	EAP-Type			UMTS			23
+VALUE	EAP-Type			AKA			23
 VALUE	EAP-Type			EAP-3Com-Wireless	24
 VALUE	EAP-Type			PEAP			25
 VALUE	EAP-Type			MS-EAP-Authentication	26
@@ -594,6 +673,17 @@ VALUE	EAP-Type			SecuriSuite-EAP		39
 VALUE	EAP-Type			DeviceConnect-EAP	40
 VALUE	EAP-Type			EAP-SPEKE		41
 VALUE	EAP-Type			EAP-MOBAC		42
+VALUE	EAP-Type			EAP-FAST		43
+VALUE	EAP-Type			Zonelabs		44
+VALUE	EAP-Type			EAP-Link		45
+VALUE	EAP-Type			EAP-PAX			46
+VALUE	EAP-Type			EAP-PSK			47
+VALUE	EAP-Type			EAP-SAKE		48
+VALUE	EAP-Type			EAP-IKEv2		49
+VALUE	EAP-Type			EAP-AKA2		50
+VALUE	EAP-Type			EAP-GPSK		51
+VALUE	EAP-Type			EAP-PWD			52
+VALUE	EAP-Type			EAP-EVEv1		53
 
 #
 #	These are duplicate values, to get around the problem of

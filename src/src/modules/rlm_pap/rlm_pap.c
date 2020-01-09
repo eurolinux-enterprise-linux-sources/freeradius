@@ -98,6 +98,7 @@ static const FR_NAME_NUMBER header_names[] = {
 	{ "{clear}",	PW_CLEARTEXT_PASSWORD },
 	{ "{cleartext}", PW_CLEARTEXT_PASSWORD },
 	{ "{md5}",	PW_MD5_PASSWORD },
+	{ "{BASE64_MD5}",	PW_MD5_PASSWORD },
 	{ "{smd5}",	PW_SMD5_PASSWORD },
 	{ "{crypt}",	PW_CRYPT_PASSWORD },
 	{ "{sha}",	PW_SHA_PASSWORD },
@@ -144,7 +145,7 @@ static int pap_instantiate(CONF_SECTION *conf, void **instance)
 		pap_detach(inst);
                 return -1;
         }
-	if (inst->scheme == NULL || strlen(inst->scheme) == 0){
+	if (!inst->scheme || !*inst->scheme) {
 		radlog(L_ERR, "rlm_pap: No scheme defined");
 		pap_detach(inst);
 		return -1;
@@ -223,6 +224,8 @@ static int base64_decode (const char *src, uint8_t *dst)
 
 	num = (length + equals) / 4;
 
+	if (!num || (num > MAX_STRING_LEN)) return 0;
+
 	for (i = 0; i < num - 1; i++) {
 		if (!decode_it(src, dst)) return 0;
 		src += 4;
@@ -244,15 +247,32 @@ static int base64_decode (const char *src, uint8_t *dst)
 static void normify(REQUEST *request, VALUE_PAIR *vp, size_t min_length)
 {
 	size_t decoded;
-	uint8_t buffer[64];
+	uint8_t buffer[256];
+	char raw[sizeof(vp->vp_strvalue) + 1];
+	char *value;
 
 	if (min_length >= sizeof(buffer)) return; /* paranoia */
+	/*
+	 *	fr_hex2bin and base64_decode don't deal well with non
+	 *	\0 terminated buffers.
+	 */
+	if (vp->type == PW_TYPE_OCTETS) {
+		if (vp->length > sizeof(raw)) return;
+
+		memcpy(raw, vp->vp_octets, vp->length);
+		raw[vp->length] = '\0';
+		value = raw;
+	} else if (vp->type == PW_TYPE_STRING) {
+		value = vp->vp_strvalue;
+	} else {
+		return;
+	}
 
 	/*
 	 *	Hex encoding.
 	 */
 	if (vp->length >= (2 * min_length)) {
-		decoded = fr_hex2bin(vp->vp_strvalue, buffer, vp->length >> 1);
+		decoded = fr_hex2bin(value, buffer, sizeof(buffer));
 		if (decoded == (vp->length >> 1)) {
 			RDEBUG2("Normalizing %s from hex encoding", vp->name);
 			memcpy(vp->vp_octets, buffer, decoded);
@@ -265,14 +285,13 @@ static void normify(REQUEST *request, VALUE_PAIR *vp, size_t min_length)
 	 *	Base 64 encoding.  It's at least 4/3 the original size,
 	 *	and we want to avoid division...
 	 */
-	if ((vp->length * 3) >= ((min_length * 4))) {
-		decoded = base64_decode(vp->vp_strvalue, buffer);
-		if (decoded >= min_length) {
-			RDEBUG2("Normalizing %s from base64 encoding", vp->name);
-			memcpy(vp->vp_octets, buffer, decoded);
-			vp->length = decoded;
-			return;
-		}
+	if (((vp->length * 3) >= ((min_length * 4))) &&
+	    ((decoded = base64_decode(value, buffer)) > 0) &&
+	    (decoded >= min_length)) {
+		RDEBUG2("Normalizing %s from base64 encoding", vp->name);
+		memcpy(vp->vp_octets, buffer, decoded);
+		vp->length = decoded;
+		return;
 	}
 
 	/*
@@ -348,7 +367,10 @@ static int pap_authorize(void *instance, REQUEST *request)
 					goto redo;
 				}
 
-				RDEBUG("Failed to decode Password-With-Header = \"%s\"", vp->vp_strvalue);
+				RDEBUG("No {...} in Password-With-Header = \"%s\", re-writing to Cleartext-Password", vp->vp_strvalue);
+				radius_pairmake(request, &request->config_items,
+						"Cleartext-Password",
+						vp->vp_strvalue, T_OP_SET);
 				break;
 			}
 
@@ -366,7 +388,7 @@ static int pap_authorize(void *instance, REQUEST *request)
 			new_vp = radius_paircreate(request,
 						   &request->config_items,
 						   attr, PW_TYPE_STRING);
-			
+
 			/*
 			 *	The data after the '}' may be binary,
 			 *	so we copy it via memcpy.
