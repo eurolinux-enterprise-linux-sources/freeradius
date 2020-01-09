@@ -1,7 +1,7 @@
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
 Version: 2.1.12
-Release: 4%{?dist}
+Release: 6%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
 URL: http://www.freeradius.org/
@@ -19,6 +19,11 @@ Patch5: freeradius-radeapclient-ipv6.patch
 Patch6: freeradius-postgres-sql.patch
 Patch7: freeradius-perl.patch
 Patch8: freeradius-cve-2012-3547.patch
+Patch9: freeradius-response-window-us-0001.patch
+Patch10: freeradius-response-window-us-0002.patch
+Patch11: freeradius-response-window-us-0003.patch
+Patch12: freeradius-response-window-us-0004.patch
+Patch13: freeradius-response-window-us-0005.patch
 
 Obsoletes: freeradius-devel
 Obsoletes: freeradius-libs
@@ -156,6 +161,11 @@ This plugin provides the unixODBC support for the FreeRADIUS server project.
 %patch6 -p1 -b postgres-sql
 %patch7 -p1 -b perl
 %patch8 -p1 -b cve-2012-3547
+%patch9 -p1
+%patch10 -p1
+%patch11 -p1
+%patch12 -p1
+%patch13 -p1
 
 # Some source files mistakenly have execute permissions set
 find $RPM_BUILD_DIR/freeradius-server-%{version} \( -name '*.c' -o -name '*.h' \) -a -perm /0111 -exec chmod a-x {} +
@@ -585,8 +595,19 @@ exit 0
 %{_libdir}/freeradius/rlm_sql_unixodbc-%{version}.so
 
 %changelog
+* Sat Jul 19 2014 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 2.1.12-6
+- Fix missing braces around a condition branch in client response_window
+  patch.
+- Resolves: bug#1107843
+
+* Fri Jul 18 2014 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 2.1.12-5
+- Add support for microsecond precision of home server's response_window
+  option, client's response_window option with the same precision and home
+  server's response_timeouts option, backported from v3.0.x.
+- Resolves: bug#1107843
+
 * Mon Sep 24 2012 John Dennis <jdennis@redhat.com> - 2.1.12-4
-- resolves: bug#855316
+- resolves: bug#855317
   CVE-2012-3547 freeradius: Stack-based buffer overflow by processing
   certain expiration date fields of a certificate during x509 certificate
   validation
