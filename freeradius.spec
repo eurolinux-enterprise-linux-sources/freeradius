@@ -1,7 +1,7 @@
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
 Version: 2.2.6
-Release: 4%{?dist}
+Release: 6%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
 URL: http://www.freeradius.org/
@@ -38,6 +38,9 @@ Patch24: freeradius-Don-t-dereference-NULL-cs-in-cf_item_parse.patch
 Patch25: freeradius-Add-disable-openssl-version-check-option.patch
 Patch26: freeradius-Move-OpenSSL-init-out-of-version-check.patch
 Patch27: freeradius-Comment-out-ippool-dhcp.conf-inclusion.patch
+Patch28: freeradius-Use-SSL_export_keying_material-for-TLSv1.2-PRF-deriv.patch
+Patch29: freeradius-More-fixes-to-use-SSL_export_keying_material.patch
+Patch30: freeradius-Always-delete-MS-MPPE-from-the-reply.-Fixes-1206.patch
 
 Obsoletes: freeradius-devel
 Obsoletes: freeradius-libs
@@ -194,6 +197,9 @@ This plugin provides the unixODBC support for the FreeRADIUS server project.
 %patch25 -p1
 %patch26 -p1
 %patch27 -p1
+%patch28 -p1
+%patch29 -p1
+%patch30 -p1
 
 # Some source files mistakenly have execute permissions set
 find $RPM_BUILD_DIR/freeradius-server-%{version} \( -name '*.c' -o -name '*.h' \) -a -perm /0111 -exec chmod a-x {} +
@@ -631,6 +637,14 @@ exit 0
 %{_libdir}/freeradius/rlm_sql_unixodbc-%{version}.so
 
 %changelog
+* Thu Sep 10 2015 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 2.2.6-6
+- Fix EAP-TTLS/CHAP/MSCHAP/MSCHAPv2 authentication with WPA supplicant v2.4
+  Related: Bug#1254176 FreeRADIUS 2.2.6 miscalculates MPPE keys with TLS 1.2
+
+* Mon Aug 17 2015 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 2.2.6-5
+- Fix EAP client authentication with TLS 1.2
+  Resolves: Bug#1254176 FreeRADIUS 2.2.6 miscalculates MPPE keys with TLS 1.2
+
 * Thu Feb 12 2015 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 2.2.6-4
 - Move OpenSSL init out of version check
   Resolves: Bug#1189394 radiusd segfaults after update
