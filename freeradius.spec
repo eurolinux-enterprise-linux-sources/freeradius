@@ -1,7 +1,7 @@
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
 Version: 2.2.6
-Release: 6%{?dist}
+Release: 7%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
 URL: http://www.freeradius.org/
@@ -41,6 +41,12 @@ Patch27: freeradius-Comment-out-ippool-dhcp.conf-inclusion.patch
 Patch28: freeradius-Use-SSL_export_keying_material-for-TLSv1.2-PRF-deriv.patch
 Patch29: freeradius-More-fixes-to-use-SSL_export_keying_material.patch
 Patch30: freeradius-Always-delete-MS-MPPE-from-the-reply.-Fixes-1206.patch
+Patch31: freeradius-FR-GV-201-check-input-output-length-in-make_secret.patch
+Patch32: freeradius-FR-GV-202-check-for-too-long-attributes-too.patch
+Patch33: freeradius-FR-GV-203-fix-memory-leak-when-using-decode_tlv.patch
+Patch34: freeradius-FR-GV-204-free-VP-if-decoding-options-fails-so-we-do.patch
+Patch35: freeradius-FR-GV-205-check-for-too-long-options-too.patch
+Patch36: freeradius-FR-GV-206-decode-option-60-string-not-63-octets.patch
 
 Obsoletes: freeradius-devel
 Obsoletes: freeradius-libs
@@ -200,6 +206,12 @@ This plugin provides the unixODBC support for the FreeRADIUS server project.
 %patch28 -p1
 %patch29 -p1
 %patch30 -p1
+%patch31 -p1
+%patch32 -p1
+%patch33 -p1
+%patch34 -p1
+%patch35 -p1
+%patch36 -p1
 
 # Some source files mistakenly have execute permissions set
 find $RPM_BUILD_DIR/freeradius-server-%{version} \( -name '*.c' -o -name '*.h' \) -a -perm /0111 -exec chmod a-x {} +
@@ -637,13 +649,26 @@ exit 0
 %{_libdir}/freeradius/rlm_sql_unixodbc-%{version}.so
 
 %changelog
+* Tue Jul 11 2017 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 2.2.6-7
+- Resolves: Bug#1469115 CVE-2017-10979 freeradius: Out-of-bounds write in
+                        rad_coalesce()
+- Resolves: Bug#1469118 CVE-2017-10978 freeradius: Out-of-bounds read/write
+                        due to improper output buffer size check in make_secret()
+- Resolves: Bug#1469120 CVE-2017-10980 freeradius: Memory leak in decode_tlv() 
+- Resolves: Bug#1469122 CVE-2017-10981 freeradius: Memory leak in
+                        fr_dhcp_decode()
+- Resolves: Bug#1469124 CVE-2017-10982 freeradius: Out-of-bounds read in
+                        fr_dhcp_decode_options()
+- Resolves: Bug#1469126 CVE-2017-10983 freeradius: Out-of-bounds read in
+                        fr_dhcp_decode() when decoding option 63 
+
 * Thu Sep 10 2015 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 2.2.6-6
 - Fix EAP-TTLS/CHAP/MSCHAP/MSCHAPv2 authentication with WPA supplicant v2.4
-  Related: Bug#1254176 FreeRADIUS 2.2.6 miscalculates MPPE keys with TLS 1.2
+  Related: Bug#1248484 FreeRADIUS 2.2.6 miscalculates MPPE keys with TLS 1.2
 
 * Mon Aug 17 2015 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 2.2.6-5
 - Fix EAP client authentication with TLS 1.2
-  Resolves: Bug#1254176 FreeRADIUS 2.2.6 miscalculates MPPE keys with TLS 1.2
+  Resolves: Bug#1248484 FreeRADIUS 2.2.6 miscalculates MPPE keys with TLS 1.2
 
 * Thu Feb 12 2015 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 2.2.6-4
 - Move OpenSSL init out of version check
