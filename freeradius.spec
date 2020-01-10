@@ -1,7 +1,7 @@
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
 Version: 3.0.13
-Release: 8%{?dist}
+Release: 9%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
 URL: http://www.freeradius.org/
@@ -36,6 +36,7 @@ Patch12: freeradius-FR-GV-206-decode-option-60-string-not-63-octets-and-.patch
 Patch13: freeradius-FR-GV-303-do-memchr-of-end-p-not-q-p.patch
 Patch14: freeradius-FR-GV-304-check-for-option-overflowing-the-packet.patch
 Patch15: freeradius-FR-GV-201-check-input-output-length-in-make_secret.patch
+Patch16: freeradius-Fix-double-free-in-rlm_sql-acct_redundant.patch
 
 %global docdir %{?_pkgdocdir}%{!?_pkgdocdir:%{_docdir}/%{name}-%{version}}
 
@@ -207,6 +208,7 @@ This plugin provides the unixODBC support for the FreeRADIUS server project.
 %patch13 -p1
 %patch14 -p1
 %patch15 -p1
+%patch16 -p1
 
 %build
 # Force compile/link options, extra security for network facing daemon
@@ -807,23 +809,28 @@ exit 0
 %{_libdir}/freeradius/rlm_sql_unixodbc.so
 
 %changelog
+* Thu Feb 22 2018 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.13-9
+- Fix double free in rlm_sql acct_redundant
+  Resolves: Bug#1551069 Radius service crashes with "Bad talloc magic value -
+                        unknown value" when using module sql rlm_sql
+
 * Mon Jul 17 2017 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.13-8
 - Avoid misinterpreting zero-size malloc in data2vp_extended() fix.
-- Related: Bug#1469414 CVE-2017-10984 freeradius: Out-of-bounds write in
+- Related: Bug#1469415 CVE-2017-10984 freeradius: Out-of-bounds write in
                        data2vp_wimax()
 
 * Tue Jul 11 2017 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.13-7
-- Resolves: Bug#1469409 CVE-2017-10978 freeradius: Out-of-bounds read/write due
+- Resolves: Bug#1469408 CVE-2017-10978 freeradius: Out-of-bounds read/write due
                         to improper output buffer size check in make_secret()
-- Resolves: Bug#1469413 CVE-2017-10983 freeradius: Out-of-bounds read in
+- Resolves: Bug#1469412 CVE-2017-10983 freeradius: Out-of-bounds read in
                         fr_dhcp_decode() when decoding option 63
-- Resolves: Bug#1469414 CVE-2017-10984 freeradius: Out-of-bounds write in
+- Resolves: Bug#1469415 CVE-2017-10984 freeradius: Out-of-bounds write in
                         data2vp_wimax()
-- Resolves: Bug#1469417 CVE-2017-10985 freeradius: Infinite loop and memory
+- Resolves: Bug#1469416 CVE-2017-10985 freeradius: Infinite loop and memory
                         exhaustion with 'concat' attributes
-- Resolves: Bug#1469418 CVE-2017-10986 freeradius: Infinite read in
+- Resolves: Bug#1469419 CVE-2017-10986 freeradius: Infinite read in
                         dhcp_attr2vp()
-- Resolves: Bug#1469421 CVE-2017-10987 freeradius: Buffer over-read in
+- Resolves: Bug#1469422 CVE-2017-10987 freeradius: Buffer over-read in
                         fr_dhcp_decode_suboptions()
 
 * Thu Jun 15 2017 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.13-6

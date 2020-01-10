@@ -1,0 +1,31 @@
+From 7a1085292deb832d7cbf6b0e8f64b8253c3f2a78 Mon Sep 17 00:00:00 2001
+From: Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com>
+Date: Tue, 13 Feb 2018 16:56:10 +0200
+Subject: [PATCH] Fix double free in rlm_sql acct_redundant
+
+Do not free "expanded" buffer twice in "acct_redundant" in rlm_sql.c.
+This fixes a crash in the case of an accounting packet not matching a
+Start entry in the database.
+
+See also https://bugzilla.redhat.com/show_bug.cgi?id=1540580
+
+Found and fixed by Benoit Welterlen.
+---
+ src/modules/rlm_sql/rlm_sql.c | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/src/modules/rlm_sql/rlm_sql.c b/src/modules/rlm_sql/rlm_sql.c
+index 3a032d32e..11f6c5d4c 100644
+--- a/src/modules/rlm_sql/rlm_sql.c
++++ b/src/modules/rlm_sql/rlm_sql.c
+@@ -1439,7 +1439,6 @@ static int acct_redundant(rlm_sql_t *inst, REQUEST *request, sql_acct_section_t
+ 		if (!*expanded) {
+ 			RDEBUG("Ignoring null query");
+ 			rcode = RLM_MODULE_NOOP;
+-			talloc_free(expanded);
+ 
+ 			goto finish;
+ 		}
+-- 
+2.16.1
+
