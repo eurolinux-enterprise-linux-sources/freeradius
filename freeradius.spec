@@ -1,7 +1,7 @@
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
 Version: 3.0.13
-Release: 6%{?dist}
+Release: 8%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
 URL: http://www.freeradius.org/
@@ -29,6 +29,13 @@ Patch5: freeradius-disable-internal-OpenSSL-cache.patch
 Patch6: freeradius-check-sizeof-packet-.-Found-by-PVS-Studio.patch
 Patch7: freeradius-parse-port.-Closes-2000.patch
 Patch8: freeradius-set-S_IWUSER-when-creating-the-file-not-later.patch
+Patch9: freeradius-FR-GV-302-do-checks-based-on-pointers-not-on-decoded.patch
+Patch10: freeradius-FR-GV-301-handle-malformed-WiMAX-attributes.patch
+Patch11: freeradius-make-data2vp_extended-be-more-like-data2vp_wimax.patch
+Patch12: freeradius-FR-GV-206-decode-option-60-string-not-63-octets-and-.patch
+Patch13: freeradius-FR-GV-303-do-memchr-of-end-p-not-q-p.patch
+Patch14: freeradius-FR-GV-304-check-for-option-overflowing-the-packet.patch
+Patch15: freeradius-FR-GV-201-check-input-output-length-in-make_secret.patch
 
 %global docdir %{?_pkgdocdir}%{!?_pkgdocdir:%{_docdir}/%{name}-%{version}}
 
@@ -193,6 +200,13 @@ This plugin provides the unixODBC support for the FreeRADIUS server project.
 %patch6 -p1
 %patch7 -p1
 %patch8 -p1
+%patch9 -p1
+%patch10 -p1
+%patch11 -p1
+%patch12 -p1
+%patch13 -p1
+%patch14 -p1
+%patch15 -p1
 
 %build
 # Force compile/link options, extra security for network facing daemon
@@ -793,6 +807,25 @@ exit 0
 %{_libdir}/freeradius/rlm_sql_unixodbc.so
 
 %changelog
+* Mon Jul 17 2017 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.13-8
+- Avoid misinterpreting zero-size malloc in data2vp_extended() fix.
+- Related: Bug#1469414 CVE-2017-10984 freeradius: Out-of-bounds write in
+                       data2vp_wimax()
+
+* Tue Jul 11 2017 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.13-7
+- Resolves: Bug#1469409 CVE-2017-10978 freeradius: Out-of-bounds read/write due
+                        to improper output buffer size check in make_secret()
+- Resolves: Bug#1469413 CVE-2017-10983 freeradius: Out-of-bounds read in
+                        fr_dhcp_decode() when decoding option 63
+- Resolves: Bug#1469414 CVE-2017-10984 freeradius: Out-of-bounds write in
+                        data2vp_wimax()
+- Resolves: Bug#1469417 CVE-2017-10985 freeradius: Infinite loop and memory
+                        exhaustion with 'concat' attributes
+- Resolves: Bug#1469418 CVE-2017-10986 freeradius: Infinite read in
+                        dhcp_attr2vp()
+- Resolves: Bug#1469421 CVE-2017-10987 freeradius: Buffer over-read in
+                        fr_dhcp_decode_suboptions()
+
 * Thu Jun 15 2017 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.13-6
 - Avoid race condition when creating session cache file
   Resolves: Bug#1458746 CVE-2017-9148 freeradius: TLS resumption

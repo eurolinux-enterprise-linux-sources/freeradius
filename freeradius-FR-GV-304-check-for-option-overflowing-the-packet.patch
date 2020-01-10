@@ -1,0 +1,41 @@
+From 4929ae5d13a2750f83cd1a7fd0191b8fca4d32d0 Mon Sep 17 00:00:00 2001
+From: "Alan T. DeKok" <aland@freeradius.org>
+Date: Mon, 3 Jul 2017 15:42:35 -0400
+Subject: [PATCH] FR-GV-304 - check for option overflowing the packet
+
+---
+ src/modules/proto_dhcp/dhcp.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/src/modules/proto_dhcp/dhcp.c b/src/modules/proto_dhcp/dhcp.c
+index dbfe81747..5fd922d03 100644
+--- a/src/modules/proto_dhcp/dhcp.c
++++ b/src/modules/proto_dhcp/dhcp.c
+@@ -629,6 +629,24 @@ static int fr_dhcp_decode_suboption(TALLOC_CTX *ctx, VALUE_PAIR **tlv, uint8_t c
+ 		uint32_t	attr;
+ 
+ 		/*
++		 *	Not enough room for the option header, it's a
++		 *	bad packet.
++		 */
++		if ((p + 2) > (data + len)) {
++			fr_pair_list_free(&head);
++			return -1;
++		}
++
++		/*
++		 *	Not enough room for the option header + data,
++		 *	it's a bad packet.
++		 */
++		if ((p + 2 + p[1]) > (data + len)) {
++			fr_pair_list_free(&head);
++			return -1;
++		}
++
++		/*
+ 		 *	The initial OID string looks like:
+ 		 *	<iana>.0
+ 		 *
+-- 
+2.13.2
+
