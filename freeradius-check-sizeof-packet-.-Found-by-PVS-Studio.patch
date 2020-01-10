@@ -1,0 +1,28 @@
+From 815387fe1f5caa6fe517364ac0995df60695f339 Mon Sep 17 00:00:00 2001
+From: "Alan T. DeKok" <aland@freeradius.org>
+Date: Wed, 17 May 2017 12:03:46 -0400
+Subject: [PATCH] check sizeof(*packet).  Found by PVS-Studio
+
+(cherry picked from commit ffa424d138611d2e7ed57b217a899d0c2009ae74)
+---
+ src/modules/rlm_eap/types/rlm_eap_pwd/rlm_eap_pwd.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/modules/rlm_eap/types/rlm_eap_pwd/rlm_eap_pwd.c b/src/modules/rlm_eap/types/rlm_eap_pwd/rlm_eap_pwd.c
+index 9abae5c80..3c043f728 100644
+--- a/src/modules/rlm_eap/types/rlm_eap_pwd/rlm_eap_pwd.c
++++ b/src/modules/rlm_eap/types/rlm_eap_pwd/rlm_eap_pwd.c
+@@ -386,8 +386,8 @@ static int mod_process(void *arg, eap_handler_t *handler)
+ 		}
+ 
+ 		packet = (pwd_id_packet_t *) in;
+-		if (in_len < sizeof(packet)) {
+-			RDEBUG("Packet is too small (%zd < %zd).", in_len, sizeof(packet));
++		if (in_len < sizeof(*packet)) {
++			RDEBUG("Packet is too small (%zd < %zd).", in_len, sizeof(*packet));
+ 			return 0;
+ 		}
+ 
+-- 
+2.11.0
+
