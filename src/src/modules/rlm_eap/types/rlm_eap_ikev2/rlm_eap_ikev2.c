@@ -95,7 +95,8 @@ CONF_PARSER module_config[] = {
 
 	{ "fast_dh_exchange", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_ikev2_t, enable_fast_dhex), "no" },
 	{ "enable_fast_reauth", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_ikev2_t, enable_fast_reconnect), "yes" },
-	CONF_PARSER_TERMINATOR
+
+	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
 
 static int set_mppe_keys(eap_handler_t *handler)
@@ -147,7 +148,7 @@ static int compose_rad_message(uint8_t *out,u_int32_t olen, EAP_DS *eap_ds) {
 /** Free memory after EAP-IKEv2 module usage
  *
  */
-static int mod_detach(void *instance)
+static int ikev2_detach(void *instance)
 {
 	struct ikev2_ctx *data = (struct ikev2_ctx *) instance;
 
@@ -191,7 +192,7 @@ static void ikev2_free_opaque(void *opaque)
 /** Configure EAP-ikev2 handler
  *
  */
-static int mod_instantiate(CONF_SECTION *conf, void **instance)
+static int ikev2_attach(CONF_SECTION *conf, void **instance)
 {
 	int ret;
 
@@ -304,7 +305,7 @@ static int mod_instantiate(CONF_SECTION *conf, void **instance)
 /** Initiate the EAP-ikev2 session by sending a challenge to the peer.
  *
  */
-static int mod_session_init(void *instance, eap_handler_t *handler)
+static int ikev2_initiate(void *instance, eap_handler_t *handler)
 {
 	INFO(IKEv2_LOG_PREFIX "Initiate connection!");
 
@@ -366,14 +367,14 @@ static int mod_session_init(void *instance, eap_handler_t *handler)
 	 *	stored in 'handler->eap_ds', which will be given back
 	 *	to us...
 	 */
-	handler->stage = PROCESS;
+	handler->stage = AUTHENTICATE;
 	return 1;
 }
 
 /** Authenticate a previously sent challenge
  *
  */
-static int mod_process(void *instance, eap_handler_t *handler)
+static int ikev2_authenticate(void *instance, eap_handler_t *handler)
 {
 	uint8_t *in;
 	uint8_t *out = NULL;
@@ -394,7 +395,7 @@ static int mod_process(void *instance, eap_handler_t *handler)
 	INFO(IKEv2_LOG_PREFIX "authenticate" );
 
 	rad_assert(handler->request != NULL);
-	rad_assert(handler->stage == PROCESS);
+	rad_assert(handler->stage == AUTHENTICATE);
 
 	EAP_DS *eap_ds=handler->eap_ds;
 	if (!eap_ds ||
@@ -516,11 +517,11 @@ static int mod_process(void *instance, eap_handler_t *handler)
  *	The module name should be the only globally exported symbol.
  *	That is, everything else should be 'static'.
  */
-extern rlm_eap_module_t rlm_eap_ikev2;
 rlm_eap_module_t rlm_eap_ikev2 = {
-	.name		= "eap_ikev2",
-	.instantiate	= mod_instantiate,	/* Create new submodule instance */
-	.session_init	= mod_session_init,	/* Initialise a new EAP session */
-	.process	= mod_process,		/* Process next round of EAP method */
-	.detach		= mod_detach		/* detach */
+	"eap_ikev2",
+	ikev2_attach,			/* attach */
+	ikev2_initiate,			/* Start the initial request */
+	NULL,				/* authorization */
+	ikev2_authenticate,		/* authentication */
+	ikev2_detach 			/* detach */
 };

@@ -14,7 +14,7 @@
  *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-/**
+/*
  * $Id$
  *
  * @file radius.c
@@ -36,13 +36,8 @@ RCSID("$Id$")
 #include	<freeradius-devel/udpfromto.h>
 #endif
 
-/*
- *	Some messages get printed out only in debugging mode.
- */
-#define FR_DEBUG_STRERROR_PRINTF if (fr_debug_lvl) fr_strerror_printf
-
 #if 0
-#define VP_TRACE printf
+#define VP_TRACE if (fr_debug_flag) printf
 
 static void VP_HEXDUMP(char const *msg, uint8_t const *data, size_t len)
 {
@@ -55,7 +50,6 @@ static void VP_HEXDUMP(char const *msg, uint8_t const *data, size_t len)
 		if ((i & 0x0f) == 0x0f) printf("\n");
 	}
 	if ((len == 0x0f) || ((len & 0x0f) != 0x0f)) printf("\n");
-	fflush(stdout);
 }
 
 #else
@@ -63,6 +57,11 @@ static void VP_HEXDUMP(char const *msg, uint8_t const *data, size_t len)
 #define VP_HEXDUMP(_x, _y, _z)
 #endif
 
+
+/*
+ *  The RFC says 4096 octets max, and most packets are less than 256.
+ */
+#define MAX_PACKET_LEN 4096
 
 /*
  *	The maximum number of attributes which we allow in an incoming
@@ -152,7 +151,7 @@ void fr_printf_log(char const *fmt, ...)
 	va_list ap;
 
 	va_start(ap, fmt);
-	if ((fr_debug_lvl == 0) || !fr_log_fp) {
+	if ((fr_debug_flag == 0) || !fr_log_fp) {
 		va_end(ap);
 		return;
 	}
@@ -179,38 +178,13 @@ static void print_hex_data(uint8_t const *ptr, int attrlen, int depth)
 }
 
 
-void rad_print_hex(RADIUS_PACKET const *packet)
+void rad_print_hex(RADIUS_PACKET *packet)
 {
 	int i;
 
 	if (!packet->data || !fr_log_fp) return;
 
-	fprintf(fr_log_fp, "  Socket:\t%d\n", packet->sockfd);
-#ifdef WITH_TCP
-	fprintf(fr_log_fp, "  Proto:\t%d\n", packet->proto);
-#endif
-
-	if (packet->src_ipaddr.af == AF_INET) {
-		char buffer[32];
-
-		fprintf(fr_log_fp, "  Src IP:\t%s\n",
-			inet_ntop(packet->src_ipaddr.af,
-				  &packet->src_ipaddr.ipaddr,
-				  buffer, sizeof(buffer)));
-		fprintf(fr_log_fp, "    port:\t%u\n", packet->src_port);
-
-		fprintf(fr_log_fp, "  Dst IP:\t%s\n",
-			inet_ntop(packet->dst_ipaddr.af,
-				  &packet->dst_ipaddr.ipaddr,
-				  buffer, sizeof(buffer)));
-		fprintf(fr_log_fp, "    port:\t%u\n", packet->dst_port);
-	}
-
-	if (packet->data[0] < FR_MAX_PACKET_CODE) {
-		fprintf(fr_log_fp, "  Code:\t\t(%d) %s\n", packet->data[0], fr_packet_codes[packet->data[0]]);
-	} else {
-		fprintf(fr_log_fp, "  Code:\t\t%u\n", packet->data[0]);
-	}
+	fprintf(fr_log_fp, "  Code:\t\t%u\n", packet->data[0]);
 	fprintf(fr_log_fp, "  Id:\t\t%u\n", packet->data[1]);
 	fprintf(fr_log_fp, "  Length:\t%u\n", ((packet->data[2] << 8) |
 				   (packet->data[3])));
@@ -271,8 +245,9 @@ void rad_print_hex(RADIUS_PACKET const *packet)
 	fflush(stdout);
 }
 
-/** Wrapper for sendto which handles sendfromto, IPv6, and all possible combinations
- *
+/**
+ * @brief Wrapper for sendto which handles sendfromto, IPv6, and all
+ *	possible combinations.
  */
 static int rad_sendto(int sockfd, void *data, size_t data_len, int flags,
 #ifdef WITH_UDPFROMTO
@@ -338,20 +313,7 @@ void rad_recv_discard(int sockfd)
 			(struct sockaddr *)&src, &sizeof_src);
 }
 
-/** Basic validation of RADIUS packet header
- *
- * @note fr_strerror errors are only available if fr_debug_lvl > 0. This is to reduce CPU time
- *	consumed when discarding malformed packet.
- *
- * @param[in] sockfd we're reading from.
- * @param[out] src_ipaddr of the packet.
- * @param[out] src_port of the packet.
- * @param[out] code Pointer to where to write the packet code.
- * @return
- *	- -1 on failure.
- *	- 1 on decode error.
- *	- >= RADIUS_HDR_LEN on success. This is the packet length as specified in the header.
- */
+
 ssize_t rad_recv_header(int sockfd, fr_ipaddr_t *src_ipaddr, uint16_t *src_port, int *code)
 {
 	ssize_t			data_len, packet_len;
@@ -359,59 +321,54 @@ ssize_t rad_recv_header(int sockfd, fr_ipaddr_t *src_ipaddr, uint16_t *src_port,
 	struct sockaddr_storage	src;
 	socklen_t		sizeof_src = sizeof(src);
 
-	data_len = recvfrom(sockfd, header, sizeof(header), MSG_PEEK, (struct sockaddr *)&src, &sizeof_src);
+	data_len = recvfrom(sockfd, header, sizeof(header), MSG_PEEK,
+			    (struct sockaddr *)&src, &sizeof_src);
 	if (data_len < 0) {
 		if ((errno == EAGAIN) || (errno == EINTR)) return 0;
 		return -1;
 	}
 
 	/*
-	 *	Convert AF.  If unknown, discard packet.
-	 */
-	if (!fr_sockaddr2ipaddr(&src, sizeof_src, src_ipaddr, src_port)) {
-		FR_DEBUG_STRERROR_PRINTF("Unknown address family");
-		rad_recv_discard(sockfd);
-
-		return 1;
-	}
-
-	/*
 	 *	Too little data is available, discard the packet.
 	 */
 	if (data_len < 4) {
-		FR_DEBUG_STRERROR_PRINTF("Expected at least 4 bytes of header data, got %zu bytes", data_len);
-invalid:
-		FR_DEBUG_STRERROR_PRINTF("Invalid data from %s: %s",
-					 fr_inet_ntop(src_ipaddr->af, &src_ipaddr->ipaddr),
-					 fr_strerror());
 		rad_recv_discard(sockfd);
 
 		return 1;
+
+	} else {		/* we got 4 bytes of data. */
+		/*
+		 *	See how long the packet says it is.
+		 */
+		packet_len = (header[2] * 256) + header[3];
+
+		/*
+		 *	The length in the packet says it's less than
+		 *	a RADIUS header length: discard it.
+		 */
+		if (packet_len < RADIUS_HDR_LEN) {
+			rad_recv_discard(sockfd);
+
+			return 1;
+
+			/*
+			 *	Enforce RFC requirements, for sanity.
+			 *	Anything after 4k will be discarded.
+			 */
+		} else if (packet_len > MAX_PACKET_LEN) {
+			rad_recv_discard(sockfd);
+
+			return 1;
+		}
 	}
 
 	/*
-	 *	See how long the packet says it is.
+	 *	Convert AF.  If unknown, discard packet.
 	 */
-	packet_len = (header[2] * 256) + header[3];
+	if (!fr_sockaddr2ipaddr(&src, sizeof_src, src_ipaddr, src_port)) {
+		rad_recv_discard(sockfd);
 
-	/*
-	 *	The length in the packet says it's less than
-	 *	a RADIUS header length: discard it.
-	 */
-	if (packet_len < RADIUS_HDR_LEN) {
-		FR_DEBUG_STRERROR_PRINTF("Expected at least " STRINGIFY(RADIUS_HDR_LEN)  " bytes of packet "
-					 "data, got %zu bytes", packet_len);
-		goto invalid;
-	}
-
-	/*
-	 *	Enforce RFC requirements, for sanity.
-	 *	Anything after 4k will be discarded.
-	 */
-	if (packet_len > MAX_PACKET_LEN) {
-		FR_DEBUG_STRERROR_PRINTF("Length field value too large, expected maximum of "
-					 STRINGIFY(MAX_PACKET_LEN) " bytes, got %zu bytes", packet_len);
-		goto invalid;
+		return 1;
 	}
 
 	*code = header[0];
@@ -424,8 +381,9 @@ invalid:
 }
 
 
-/** Wrapper for recvfrom, which handles recvfromto, IPv6, and all possible combinations
- *
+/**
+ * @brief wrapper for recvfrom, which handles recvfromto, IPv6, and all
+ *	possible combinations.
  */
 static ssize_t rad_recvfrom(int sockfd, RADIUS_PACKET *packet, int flags,
 			    fr_ipaddr_t *src_ipaddr, uint16_t *src_port,
@@ -534,12 +492,14 @@ static ssize_t rad_recvfrom(int sockfd, RADIUS_PACKET *packet, int flags,
 
 
 #define AUTH_PASS_LEN (AUTH_VECTOR_LEN)
-/** Build an encrypted secret value to return in a reply packet
+/**
+ * @brief Build an encrypted secret value to return in a reply packet
  *
- * The secret is hidden by xoring with a MD5 digest created from
- * the shared secret and the authentication vector.
- * We put them into MD5 in the reverse order from that used when
- * encrypting passwords to RADIUS.
+ *	       The secret is hidden by xoring with a MD5 digest
+ *	       created from the shared secret and the authentication
+ *	       vector.  We put them into MD5 in the reverse order from
+ *	       that used when encrypting passwords to RADIUS.
+ *
  */
 static void make_secret(uint8_t *digest, uint8_t const *vector,
 			char const *secret, uint8_t const *value)
@@ -614,59 +574,62 @@ static void make_passwd(uint8_t *output, ssize_t *outlen,
 	memcpy(output, passwd, len);
 }
 
-
 static void make_tunnel_passwd(uint8_t *output, ssize_t *outlen,
 			       uint8_t const *input, size_t inlen, size_t room,
 			       char const *secret, uint8_t const *vector)
 {
 	FR_MD5_CTX context, old;
 	uint8_t	digest[AUTH_VECTOR_LEN];
-	size_t	i, n;
-	size_t	encrypted_len;
+	uint8_t passwd[MAX_STRING_LEN + AUTH_VECTOR_LEN];
+	int	i, n;
+	int	len;
 
 	/*
-	 *	The password gets encoded with a 1-byte "length"
-	 *	field.  Ensure that it doesn't overflow.
+	 *	Be paranoid.
 	 */
 	if (room > 253) room = 253;
 
 	/*
-	 *	Limit the maximum size of the input password.  2 bytes
-	 *	are taken up by the salt, and one by the encoded
-	 *	"length" field.  Note that if we have a tag, the
-	 *	"room" will be 252 octets, not 253 octets.
+	 *	Account for 2 bytes of the salt, and round the room
+	 *	available down to the nearest multiple of 16.  Then,
+	 *	subtract one from that to account for the length byte,
+	 *	and the resulting number is the upper bound on the data
+	 *	to copy.
+	 *
+	 *	We could short-cut this calculation just be forcing
+	 *	inlen to be no more than 239.  It would work for all
+	 *	VSA's, as we don't pack multiple VSA's into one
+	 *	attribute.
+	 *
+	 *	However, this calculation is more general, if a little
+	 *	complex.  And it will work in the future for all possible
+	 *	kinds of weird attribute packing.
 	 */
-	if (inlen > (room - 3)) inlen = room - 3;
+	room -= 2;
+	room -= (room & 0x0f);
+	room--;
+
+	if (inlen > room) inlen = room;
 
 	/*
-	 *	Length of the encrypted data is the clear-text
-	 *	password length plus one byte which encodes the length
-	 *	of the password.  We round up to the nearest encoding
-	 *	block.  Note that this can result in the encoding
-	 *	length being more than 253 octets.
+	 *	Length of the encrypted data is password length plus
+	 *	one byte for the length of the password.
 	 */
-	encrypted_len = inlen + 1;
-	if ((encrypted_len & 0x0f) != 0) {
-		encrypted_len += 0x0f;
-		encrypted_len &= ~0x0f;
+	len = inlen + 1;
+	if ((len & 0x0f) != 0) {
+		len += 0x0f;
+		len &= ~0x0f;
 	}
+	*outlen = len + 2;	/* account for the salt */
 
 	/*
-	 *	We need 2 octets for the salt, followed by the actual
-	 *	encrypted data.
+	 *	Copy the password over.
 	 */
-	if (encrypted_len > (room - 2)) encrypted_len = room - 2;
-
-	*outlen = encrypted_len + 2;	/* account for the salt */
-
-	/*
-	 *	Copy the password over, and zero-fill the remainder.
-	 */
-	memcpy(output + 3, input, inlen);
-	memset(output + 3 + inlen, 0, *outlen - 3 - inlen);
+	memcpy(passwd + 3, input, inlen);
+	memset(passwd + 3 + inlen, 0, sizeof(passwd) - 3 - inlen);
 
 	/*
-	 *	Generate salt.  The RFCs say:
+	 *	Generate salt.  The RFC's say:
 	 *
 	 *	The high bit of salt[0] must be set, each salt in a
 	 *	packet should be unique, and they should be random
@@ -674,41 +637,38 @@ static void make_tunnel_passwd(uint8_t *output, ssize_t *outlen,
 	 *	So, we set the high bit, add in a counter, and then
 	 *	add in some CSPRNG data.  should be OK..
 	 */
-	output[0] = (0x80 | ( ((salt_offset++) & 0x0f) << 3) |
+	passwd[0] = (0x80 | ( ((salt_offset++) & 0x0f) << 3) |
 		     (fr_rand() & 0x07));
-	output[1] = fr_rand();
-	output[2] = inlen;	/* length of the password string */
+	passwd[1] = fr_rand();
+	passwd[2] = inlen;	/* length of the password string */
 
 	fr_md5_init(&context);
 	fr_md5_update(&context, (uint8_t const *) secret, strlen(secret));
 	old = context;
 
 	fr_md5_update(&context, vector, AUTH_VECTOR_LEN);
-	fr_md5_update(&context, &output[0], 2);
+	fr_md5_update(&context, &passwd[0], 2);
 
-	for (n = 0; n < encrypted_len; n += AUTH_PASS_LEN) {
-		size_t block_len;
-
+	for (n = 0; n < len; n += AUTH_PASS_LEN) {
 		if (n > 0) {
 			context = old;
 			fr_md5_update(&context,
-				       output + 2 + n - AUTH_PASS_LEN,
+				       passwd + 2 + n - AUTH_PASS_LEN,
 				       AUTH_PASS_LEN);
 		}
 
 		fr_md5_final(digest, &context);
 
-		if ((2 + n + AUTH_PASS_LEN) < room) {
-			block_len = AUTH_PASS_LEN;
-		} else {
-			block_len = room - 2 - n;
-		}
-
-		for (i = 0; i < block_len; i++) {
-			output[i + 2 + n] ^= digest[i];
+		for (i = 0; i < AUTH_PASS_LEN; i++) {
+			passwd[i + 2 + n] ^= digest[i];
 		}
 	}
+	memcpy(output, passwd, len + 2);
 }
+
+extern int const fr_attr_max_tlv;
+extern int const fr_attr_shift[];
+extern int const fr_attr_mask[];
 
 static int do_next_tlv(VALUE_PAIR const *vp, VALUE_PAIR const *next, int nest)
 {
@@ -762,10 +722,10 @@ static ssize_t vp2attr_rfc(RADIUS_PACKET const *packet,
 			   char const *secret, VALUE_PAIR const **pvp,
 			   unsigned int attribute, uint8_t *ptr, size_t room);
 
-/** Encode the *data* portion of the TLV
- *
- * This is really a sub-function of vp2data_any().  It encodes the *data* portion
- * of the TLV, and assumes that the encapsulating attribute has already been encoded.
+/**
+ * @brief This is really a sub-function of vp2data_any().  It encodes
+ *	the *data* portion of the TLV, and assumes that the encapsulating
+ *	attribute has already been encoded.
  */
 static ssize_t vp2data_tlvs(RADIUS_PACKET const *packet,
 			    RADIUS_PACKET const *original,
@@ -808,7 +768,7 @@ static ssize_t vp2data_tlvs(RADIUS_PACKET const *packet,
 		ptr[1] += len;
 
 #ifndef NDEBUG
-		if ((fr_debug_lvl > 3) && fr_log_fp) {
+		if ((fr_debug_flag > 3) && fr_log_fp) {
 			fprintf(fr_log_fp, "\t\t%02x %02x  ", ptr[0], ptr[1]);
 			print_hex_data(ptr + 2, len, 3);
 		}
@@ -822,7 +782,7 @@ static ssize_t vp2data_tlvs(RADIUS_PACKET const *packet,
 	}
 
 #ifndef NDEBUG
-	if ((fr_debug_lvl > 3) && fr_log_fp) {
+	if ((fr_debug_flag > 3) && fr_log_fp) {
 		DICT_ATTR const *da;
 
 		da = dict_attrbyvalue(svp->da->attr & ((1 << fr_attr_shift[nest ]) - 1), svp->da->vendor);
@@ -833,8 +793,8 @@ static ssize_t vp2data_tlvs(RADIUS_PACKET const *packet,
 	return ptr - start;
 }
 
-/** Encodes the data portion of an attribute
- *
+/**
+ * @brief Encodes the data portion of an attribute.
  * @return -1 on error, or the length of the data portion.
  */
 static ssize_t vp2data_any(RADIUS_PACKET const *packet,
@@ -867,16 +827,22 @@ static ssize_t vp2data_any(RADIUS_PACKET const *packet,
 				    start, room);
 	}
 
+	debug_pair(vp);
+
 	/*
 	 *	Set up the default sources for the data.
 	 */
-	len = vp->vp_length;
+	len = vp->length;
 
-	switch (vp->da->type) {
+	switch(vp->da->type) {
 	case PW_TYPE_STRING:
 	case PW_TYPE_OCTETS:
+	case PW_TYPE_TLV:
 		data = vp->data.ptr;
-		if (!data) return 0;
+		if (!data) {
+			fr_strerror_printf("ERROR: Cannot encode NULL data");
+			return -1;
+		}
 		break;
 
 	case PW_TYPE_IFID:
@@ -992,15 +958,13 @@ static ssize_t vp2data_any(RADIUS_PACKET const *packet,
 			make_tunnel_passwd(ptr + lvalue, &len, data, len,
 					   room - lvalue,
 					   secret, original->vector);
-			len += lvalue;
 			break;
 		case PW_CODE_ACCOUNTING_REQUEST:
 		case PW_CODE_DISCONNECT_REQUEST:
 		case PW_CODE_COA_REQUEST:
 			ptr[0] = TAG_VALID(vp->tag) ? vp->tag : TAG_NONE;
-			make_tunnel_passwd(ptr + 1, &len, data, len, room - 1,
+			make_tunnel_passwd(ptr + 1, &len, data, len - 1, room,
 					   secret, packet->vector);
-			len += lvalue;
 			break;
 		}
 		break;
@@ -1077,7 +1041,7 @@ static ssize_t attr_shift(uint8_t const *start, uint8_t const *end,
 
 		len -= sublen;
 		memmove(ptr + 255 + hdr_len, ptr + 255, sublen);
-		memmove(ptr + 255, ptr, hdr_len);
+		memcpy(ptr + 255, ptr, hdr_len);
 		ptr[1] += sublen;
 		if (vsa_offset) ptr[vsa_offset] += sublen;
 		ptr[flag_offset] |= 0x80;
@@ -1094,7 +1058,8 @@ static ssize_t attr_shift(uint8_t const *start, uint8_t const *end,
 }
 
 
-/** Encode an "extended" attribute
+/**
+ * @brief Encode an "extended" attribute.
  */
 int rad_vp2extended(RADIUS_PACKET const *packet,
 		    RADIUS_PACKET const *original,
@@ -1178,7 +1143,7 @@ int rad_vp2extended(RADIUS_PACKET const *packet,
 	ptr[1] += len;
 
 #ifndef NDEBUG
-	if ((fr_debug_lvl > 3) && fr_log_fp) {
+	if ((fr_debug_flag > 3) && fr_log_fp) {
 		int jump = 3;
 
 		fprintf(fr_log_fp, "\t\t%02x %02x  ", ptr[0], ptr[1]);
@@ -1209,8 +1174,8 @@ int rad_vp2extended(RADIUS_PACKET const *packet,
 }
 
 
-/** Encode a WiMAX attribute
- *
+/**
+ * @brief Encode a WiMAX attribute.
  */
 int rad_vp2wimax(RADIUS_PACKET const *packet,
 		 RADIUS_PACKET const *original,
@@ -1271,7 +1236,7 @@ int rad_vp2wimax(RADIUS_PACKET const *packet,
 	ptr[7] += len;
 
 #ifndef NDEBUG
-	if ((fr_debug_lvl > 3) && fr_log_fp) {
+	if ((fr_debug_flag > 3) && fr_log_fp) {
 		fprintf(fr_log_fp, "\t\t%02x %02x  %02x%02x%02x%02x (%u)  %02x %02x %02x   ",
 		       ptr[0], ptr[1],
 		       ptr[2], ptr[3], ptr[4], ptr[5],
@@ -1284,10 +1249,11 @@ int rad_vp2wimax(RADIUS_PACKET const *packet,
 	return (ptr + ptr[1]) - start;
 }
 
-/** Encode an RFC format attribute, with the "concat" flag set
+/**
+ * @brief Encode an RFC format attribute, with the "concat" flag set.
  *
- * If there isn't enough room in the packet, the data is
- * truncated to fit.
+ *	If there isn't enough room in the packet, the data is
+ *	truncated to fit.
  */
 static ssize_t vp2attr_concat(UNUSED RADIUS_PACKET const *packet,
 			      UNUSED RADIUS_PACKET const *original,
@@ -1301,8 +1267,10 @@ static ssize_t vp2attr_concat(UNUSED RADIUS_PACKET const *packet,
 
 	VERIFY_VP(vp);
 
+	debug_pair(vp);
+
 	p = vp->vp_octets;
-	len = vp->vp_length;
+	len = vp->length;
 
 	while (len > 0) {
 		if (room <= 2) break;
@@ -1321,7 +1289,7 @@ static ssize_t vp2attr_concat(UNUSED RADIUS_PACKET const *packet,
 		memcpy(ptr + 2, p, left);
 
 #ifndef NDEBUG
-		if ((fr_debug_lvl > 3) && fr_log_fp) {
+		if ((fr_debug_flag > 3) && fr_log_fp) {
 			fprintf(fr_log_fp, "\t\t%02x %02x  ", ptr[0], ptr[1]);
 			print_hex_data(ptr + 2, len, 3);
 		}
@@ -1337,11 +1305,13 @@ static ssize_t vp2attr_concat(UNUSED RADIUS_PACKET const *packet,
 	return ptr - start;
 }
 
-/** Encode an RFC format TLV.
+/**
+ * @brief Encode an RFC format TLV.
  *
- * This could be a standard attribute, or a TLV data type.
- * If it's a standard attribute, then vp->da->attr == attribute.
- * Otherwise, attribute may be something else.
+ * 	This could be a standard attribute,
+ *	or a TLV data type.  If it's a standard attribute, then
+ *	vp->da->attr == attribute.  Otherwise, attribute may be
+ *	something else.
  */
 static ssize_t vp2attr_rfc(RADIUS_PACKET const *packet,
 			   RADIUS_PACKET const *original,
@@ -1355,15 +1325,15 @@ static ssize_t vp2attr_rfc(RADIUS_PACKET const *packet,
 	ptr[0] = attribute & 0xff;
 	ptr[1] = 2;
 
-	if (room > 255) room = 255;
+	if (room > ((unsigned) 255 - ptr[1])) room = 255 - ptr[1];
 
-	len = vp2data_any(packet, original, secret, 0, pvp, ptr + ptr[1], room - ptr[1]);
+	len = vp2data_any(packet, original, secret, 0, pvp, ptr + ptr[1], room);
 	if (len <= 0) return len;
 
 	ptr[1] += len;
 
 #ifndef NDEBUG
-	if ((fr_debug_lvl > 3) && fr_log_fp) {
+	if ((fr_debug_flag > 3) && fr_log_fp) {
 		fprintf(fr_log_fp, "\t\t%02x %02x  ", ptr[0], ptr[1]);
 		print_hex_data(ptr + 2, len, 3);
 	}
@@ -1373,9 +1343,9 @@ static ssize_t vp2attr_rfc(RADIUS_PACKET const *packet,
 }
 
 
-/** Encode a VSA which is a TLV
- *
- * If it's in the RFC format, call vp2attr_rfc.  Otherwise, encode it here.
+/**
+ * @brief Encode a VSA which is a TLV.  If it's in the RFC format, call
+ *	vp2attr_rfc.  Otherwise, encode it here.
  */
 static ssize_t vp2attr_vsa(RADIUS_PACKET const *packet,
 			   RADIUS_PACKET const *original,
@@ -1442,34 +1412,36 @@ static ssize_t vp2attr_vsa(RADIUS_PACKET const *packet,
 
 	}
 
-	if (room > 255) room = 255;
+	if (room > ((unsigned) 255 - (dv->type + dv->length))) {
+		room = 255 - (dv->type + dv->length);
+	}
 
 	len = vp2data_any(packet, original, secret, 0, pvp,
-			  ptr + dv->type + dv->length, room - (dv->type + dv->length));
+			  ptr + dv->type + dv->length, room);
 	if (len <= 0) return len;
 
 	if (dv->length) ptr[dv->type + dv->length - 1] += len;
 
 #ifndef NDEBUG
-	if ((fr_debug_lvl > 3) && fr_log_fp) {
+	if ((fr_debug_flag > 3) && fr_log_fp) {
 		switch (dv->type) {
 		default:
 			break;
 
 		case 4:
-			if ((fr_debug_lvl > 3) && fr_log_fp)
+			if ((fr_debug_flag > 3) && fr_log_fp)
 				fprintf(fr_log_fp, "\t\t%02x%02x%02x%02x ",
 					ptr[0], ptr[1], ptr[2], ptr[3]);
 			break;
 
 		case 2:
-			if ((fr_debug_lvl > 3) && fr_log_fp)
+			if ((fr_debug_flag > 3) && fr_log_fp)
 				fprintf(fr_log_fp, "\t\t%02x%02x ",
 					ptr[0], ptr[1]);
 		break;
 
 		case 1:
-			if ((fr_debug_lvl > 3) && fr_log_fp)
+			if ((fr_debug_flag > 3) && fr_log_fp)
 				fprintf(fr_log_fp, "\t\t%02x ", ptr[0]);
 			break;
 		}
@@ -1501,8 +1473,8 @@ static ssize_t vp2attr_vsa(RADIUS_PACKET const *packet,
 }
 
 
-/** Encode a Vendor-Specific attribute
- *
+/**
+ * @brief Encode a Vendor-Specific attribute.
  */
 int rad_vp2vsa(RADIUS_PACKET const *packet, RADIUS_PACKET const *original,
 		char const *secret, VALUE_PAIR const **pvp, uint8_t *ptr,
@@ -1513,17 +1485,12 @@ int rad_vp2vsa(RADIUS_PACKET const *packet, RADIUS_PACKET const *original,
 	VALUE_PAIR const *vp = *pvp;
 
 	VERIFY_VP(vp);
-
-	if (vp->da->vendor == 0) {
-		fr_strerror_printf("rad_vp2vsa called with rfc attribute");
-		return -1;
-	}
-
 	/*
 	 *	Double-check for WiMAX format.
 	 */
 	if (vp->da->flags.wimax) {
-		return rad_vp2wimax(packet, original, secret, pvp, ptr, room);
+		return rad_vp2wimax(packet, original, secret, pvp,
+				    ptr, room);
 	}
 
 	if (vp->da->vendor > FR_MAX_VENDOR) {
@@ -1545,15 +1512,15 @@ int rad_vp2vsa(RADIUS_PACKET const *packet, RADIUS_PACKET const *original,
 	lvalue = htonl(vp->da->vendor);
 	memcpy(ptr + 2, &lvalue, 4);
 
-	if (room > 255) room = 255;
+	if (room > ((unsigned) 255 - ptr[1])) room = 255 - ptr[1];
 
 	len = vp2attr_vsa(packet, original, secret, pvp,
 			  vp->da->attr, vp->da->vendor,
-			  ptr + ptr[1], room - ptr[1]);
+			  ptr + ptr[1], room);
 	if (len < 0) return len;
 
 #ifndef NDEBUG
-	if ((fr_debug_lvl > 3) && fr_log_fp) {
+	if ((fr_debug_flag > 3) && fr_log_fp) {
 		fprintf(fr_log_fp, "\t\t%02x %02x  %02x%02x%02x%02x (%u)  ",
 		       ptr[0], ptr[1],
 		       ptr[2], ptr[3], ptr[4], ptr[5],
@@ -1568,8 +1535,8 @@ int rad_vp2vsa(RADIUS_PACKET const *packet, RADIUS_PACKET const *original,
 }
 
 
-/** Encode an RFC standard attribute 1..255
- *
+/**
+ * @brief Encode an RFC standard attribute 1..255
  */
 int rad_vp2rfc(RADIUS_PACKET const *packet,
 	       RADIUS_PACKET const *original,
@@ -1594,7 +1561,7 @@ int rad_vp2rfc(RADIUS_PACKET const *packet,
 	 *	Only CUI is allowed to have zero length.
 	 *	Thank you, WiMAX!
 	 */
-	if ((vp->vp_length == 0) &&
+	if ((vp->length == 0) &&
 	    (vp->da->attr == PW_CHARGEABLE_USER_IDENTITY)) {
 		ptr[0] = PW_CHARGEABLE_USER_IDENTITY;
 		ptr[1] = 2;
@@ -1606,14 +1573,15 @@ int rad_vp2rfc(RADIUS_PACKET const *packet,
 	/*
 	 *	Message-Authenticator is hard-coded.
 	 */
-	if (!vp->da->vendor && (vp->da->attr == PW_MESSAGE_AUTHENTICATOR)) {
+	if (vp->da->attr == PW_MESSAGE_AUTHENTICATOR) {
 		if (room < 18) return -1;
 
+		debug_pair(vp);
 		ptr[0] = PW_MESSAGE_AUTHENTICATOR;
 		ptr[1] = 18;
 		memset(ptr + 2, 0, 16);
 #ifndef NDEBUG
-		if ((fr_debug_lvl > 3) && fr_log_fp) {
+		if ((fr_debug_flag > 3) && fr_log_fp) {
 			fprintf(fr_log_fp, "\t\t50 12 ...\n");
 		}
 #endif
@@ -1625,7 +1593,7 @@ int rad_vp2rfc(RADIUS_PACKET const *packet,
 	/*
 	 *	EAP-Message is special.
 	 */
-	if (vp->da->flags.concat && (vp->vp_length > 253)) {
+	if (vp->da->flags.concat && (vp->length > 253)) {
 		return vp2attr_concat(packet, original, secret, pvp, vp->da->attr,
 				      ptr, room);
 	}
@@ -1678,8 +1646,8 @@ static ssize_t rad_vp2rfctlv(RADIUS_PACKET const *packet,
 	return start[1];
 }
 
-/** Parse a data structure into a RADIUS attribute
- *
+/**
+ * @brief Parse a data structure into a RADIUS attribute.
  */
 int rad_vp2attr(RADIUS_PACKET const *packet, RADIUS_PACKET const *original,
 		char const *secret, VALUE_PAIR const **pvp, uint8_t *start,
@@ -1697,10 +1665,7 @@ int rad_vp2attr(RADIUS_PACKET const *packet, RADIUS_PACKET const *original,
 	 *	RFC format attributes take the fast path.
 	 */
 	if (!vp->da->vendor) {
-		if (vp->da->attr > 255) {
-			*pvp = vp->next;
-			return 0;
-		}
+		if (vp->da->attr > 255) return 0;
 
 		return rad_vp2rfc(packet, original, secret, pvp,
 				  start, room);
@@ -1725,12 +1690,13 @@ int rad_vp2attr(RADIUS_PACKET const *packet, RADIUS_PACKET const *original,
 				    start, room);
 	}
 
-	return rad_vp2vsa(packet, original, secret, pvp, start, room);
+	return rad_vp2vsa(packet, original, secret, pvp,
+			  start, room);
 }
 
 
-/** Encode a packet
- *
+/**
+ * @brief Encode a packet.
  */
 int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 	       char const *secret)
@@ -1740,11 +1706,31 @@ int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 	uint16_t		total_length;
 	int			len;
 	VALUE_PAIR const	*reply;
+	char const		*what;
+	char			ip_src_buffer[INET6_ADDRSTRLEN];
+	char			ip_dst_buffer[INET6_ADDRSTRLEN];
 
 	/*
 	 *	A 4K packet, aligned on 64-bits.
 	 */
 	uint64_t	data[MAX_PACKET_LEN / sizeof(uint64_t)];
+
+	if (is_radius_code(packet->code)) {
+		what = fr_packet_codes[packet->code];
+	} else {
+		what = "Reply";
+	}
+
+	DEBUG("Sending %s Id %d from %s:%u to %s:%u\n",
+	      what, packet->id,
+	      inet_ntop(packet->src_ipaddr.af,
+			&packet->src_ipaddr.ipaddr,
+			ip_src_buffer, sizeof(ip_src_buffer)),
+	      packet->src_port,
+	      inet_ntop(packet->dst_ipaddr.af,
+			&packet->dst_ipaddr.ipaddr,
+			ip_dst_buffer, sizeof(ip_dst_buffer)),
+	      packet->dst_port);
 
 	/*
 	 *	Double-check some things based on packet code.
@@ -1808,7 +1794,7 @@ int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 	 */
 	reply = packet->vps;
 	while (reply) {
-		size_t last_len, room;
+		size_t last_len;
 		char const *last_name = NULL;
 
 		VERIFY_VP(reply);
@@ -1826,8 +1812,8 @@ int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 			 *	attributes with a debug build.
 			 */
 			if (reply->da->attr == PW_RAW_ATTRIBUTE) {
-				memcpy(ptr, reply->vp_octets, reply->vp_length);
-				len = reply->vp_length;
+				memcpy(ptr, reply->vp_octets, reply->length);
+				len = reply->length;
 				reply = reply->next;
 				goto next;
 			}
@@ -1837,24 +1823,10 @@ int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 		}
 
 		/*
-		 *	We allow zero-length strings in "unlang", but
-		 *	skip them (except for CUI, thanks WiMAX!) on
-		 *	all other attributes.
-		 */
-		if (reply->vp_length == 0) {
-			if ((reply->da->vendor != 0) ||
-			    ((reply->da->attr != PW_CHARGEABLE_USER_IDENTITY) &&
-			     (reply->da->attr != PW_MESSAGE_AUTHENTICATOR))) {
-				reply = reply->next;
-				continue;
-			}
-		}
-
-		/*
 		 *	Set the Message-Authenticator to the correct
 		 *	length and initial value.
 		 */
-		if (!reply->da->vendor && (reply->da->attr == PW_MESSAGE_AUTHENTICATOR)) {
+		if (reply->da->attr == PW_MESSAGE_AUTHENTICATOR) {
 			/*
 			 *	Cache the offset to the
 			 *	Message-Authenticator
@@ -1862,15 +1834,12 @@ int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 			packet->offset = total_length;
 			last_len = 16;
 		} else {
-			last_len = reply->vp_length;
+			last_len = reply->length;
 		}
 		last_name = reply->da->name;
 
-		room = ((uint8_t *) data) + sizeof(data) - ptr;
-
-		if (room <= 2) break;
-
-		len = rad_vp2attr(packet, original, secret, &reply, ptr, room);
+		len = rad_vp2attr(packet, original, secret, &reply, ptr,
+				  ((uint8_t *) data) + sizeof(data) - ptr);
 		if (len < 0) return -1;
 
 		/*
@@ -1918,8 +1887,8 @@ int rad_encode(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 }
 
 
-/** Sign a previously encoded packet
- *
+/**
+ * @brief Sign a previously encoded packet.
  */
 int rad_sign(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 	     char const *secret)
@@ -1941,44 +1910,8 @@ int rad_sign(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 	}
 
 	/*
-	 *	Set up the authentication vector with zero, or with
-	 *	the original vector, prior to signing.
-	 */
-	switch (packet->code) {
-	case PW_CODE_ACCOUNTING_REQUEST:
-	case PW_CODE_DISCONNECT_REQUEST:
-	case PW_CODE_COA_REQUEST:
-		memset(packet->vector, 0, AUTH_VECTOR_LEN);
-		break;
-
-	case PW_CODE_ACCESS_ACCEPT:
-	case PW_CODE_ACCESS_REJECT:
-	case PW_CODE_ACCESS_CHALLENGE:
-	case PW_CODE_ACCOUNTING_RESPONSE:
-	case PW_CODE_DISCONNECT_ACK:
-	case PW_CODE_DISCONNECT_NAK:
-	case PW_CODE_COA_ACK:
-	case PW_CODE_COA_NAK:
-		if (!original) {
-			fr_strerror_printf("ERROR: Cannot sign response packet without a request packet");
-			return -1;
-		}
-		memcpy(packet->vector, original->vector, AUTH_VECTOR_LEN);
-		break;
-
-	case PW_CODE_ACCESS_REQUEST:
-	case PW_CODE_STATUS_SERVER:
-	default:
-		break;		/* packet->vector is already random bytes */
-	}
-
-#ifndef NDEBUG
-	if ((fr_debug_lvl > 3) && fr_log_fp) rad_print_hex(packet);
-#endif
-
-	/*
 	 *	If there's a Message-Authenticator, update it
-	 *	now.
+	 *	now, BEFORE updating the authentication vector.
 	 */
 	if (packet->offset > 0) {
 		uint8_t calc_auth_vector[AUTH_VECTOR_LEN];
@@ -1995,7 +1928,6 @@ int rad_sign(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 		case PW_CODE_DISCONNECT_NAK:
 		case PW_CODE_COA_REQUEST:
 		case PW_CODE_COA_ACK:
-		case PW_CODE_COA_NAK:
 			memset(hdr->vector, 0, AUTH_VECTOR_LEN);
 			break;
 
@@ -2003,11 +1935,17 @@ int rad_sign(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 		case PW_CODE_ACCESS_ACCEPT:
 		case PW_CODE_ACCESS_REJECT:
 		case PW_CODE_ACCESS_CHALLENGE:
-			memcpy(hdr->vector, original->vector, AUTH_VECTOR_LEN);
+			if (!original) {
+				fr_strerror_printf("ERROR: Cannot sign response packet without a request packet");
+				return -1;
+			}
+			memcpy(hdr->vector, original->vector,
+			       AUTH_VECTOR_LEN);
 			break;
 
-		default:
+		default:	/* others have vector already set to zero */
 			break;
+
 		}
 
 		/*
@@ -2020,12 +1958,13 @@ int rad_sign(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 			    (uint8_t const *) secret, strlen(secret));
 		memcpy(packet->data + packet->offset + 2,
 		       calc_auth_vector, AUTH_VECTOR_LEN);
-	}
 
-	/*
-	 *	Copy the request authenticator over to the packet.
-	 */
-	memcpy(hdr->vector, packet->vector, AUTH_VECTOR_LEN);
+		/*
+		 *	Copy the original request vector back
+		 *	to the raw packet.
+		 */
+		memcpy(hdr->vector, packet->vector, AUTH_VECTOR_LEN);
+	}
 
 	/*
 	 *	Switch over the packet code, deciding how to
@@ -2033,7 +1972,7 @@ int rad_sign(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 	 */
 	switch (packet->code) {
 		/*
-		 *	Request packets are not signed, but
+		 *	Request packets are not signed, bur
 		 *	have a random authentication vector.
 		 */
 	case PW_CODE_ACCESS_REQUEST:
@@ -2064,18 +2003,29 @@ int rad_sign(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 	return 0;
 }
 
-/** Reply to the request
- *
- * Also attach reply attribute value pairs and any user message provided.
+/**
+ * @brief Reply to the request.  Also attach
+ *	reply attribute value pairs and any user message provided.
  */
 int rad_send(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 	     char const *secret)
 {
+	VALUE_PAIR		*reply;
+	char const		*what;
+	char			ip_src_buffer[128];
+	char			ip_dst_buffer[128];
+
 	/*
 	 *	Maybe it's a fake packet.  Don't send it.
 	 */
 	if (!packet || (packet->sockfd < 0)) {
 		return 0;
+	}
+
+	if (is_radius_code(packet->code)) {
+		what = fr_packet_codes[packet->code];
+	} else {
+		what = "Reply";
 	}
 
 	/*
@@ -2101,10 +2051,25 @@ int rad_send(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 		 *	If packet->data points to data, then we print out
 		 *	the VP list again only for debugging.
 		 */
+	} else if (fr_debug_flag) {
+		DEBUG("Sending %s Id %d from %s:%u to %s:%u\n", what,
+		      packet->id,
+		      inet_ntop(packet->src_ipaddr.af, &packet->src_ipaddr.ipaddr,
+				ip_src_buffer, sizeof(ip_src_buffer)),
+		      packet->src_port,
+		      inet_ntop(packet->dst_ipaddr.af, &packet->dst_ipaddr.ipaddr,
+				ip_dst_buffer, sizeof(ip_dst_buffer)),
+		      packet->dst_port);
+
+		for (reply = packet->vps; reply; reply = reply->next) {
+			if ((reply->da->vendor == 0) &&
+			    ((reply->da->attr & 0xFFFF) > 0xff)) continue;
+			debug_pair(reply);
+		}
 	}
 
 #ifndef NDEBUG
-	if ((fr_debug_lvl > 3) && fr_log_fp) rad_print_hex(packet);
+	if ((fr_debug_flag > 3) && fr_log_fp) rad_print_hex(packet);
 #endif
 
 #ifdef WITH_TCP
@@ -2133,12 +2098,15 @@ int rad_send(RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 			  &packet->dst_ipaddr, packet->dst_port);
 }
 
-/** Do a comparison of two authentication digests by comparing the FULL digest
+/**
+ * @brief Do a comparison of two authentication digests by comparing
+ *	the FULL digest.
  *
- * Otherwise, the server can be subject to timing attacks that allow attackers
- * find a valid message authenticator.
+ *	Otherwise, the server can be subject to
+ *	timing attacks that allow attackers find a valid message
+ *	authenticator.
  *
- * http://www.cs.rice.edu/~dwallach/pub/crosby-timing2009.pdf
+ *	http://www.cs.rice.edu/~dwallach/pub/crosby-timing2009.pdf
  */
 int rad_digest_cmp(uint8_t const *a, uint8_t const *b, size_t length)
 {
@@ -2153,9 +2121,9 @@ int rad_digest_cmp(uint8_t const *a, uint8_t const *b, size_t length)
 }
 
 
-/** Validates the requesting client NAS
- *
- * Calculates the request Authenticator based on the clients private key.
+/**
+ * @brief Validates the requesting client NAS.  Calculates the
+ *	Request Authenticator based on the clients private key.
  */
 static int calc_acctdigest(RADIUS_PACKET *packet, char const *secret)
 {
@@ -2186,10 +2154,9 @@ static int calc_acctdigest(RADIUS_PACKET *packet, char const *secret)
 }
 
 
-/** Validates the requesting client NAS
- *
- * Calculates the response Authenticator based on the clients
- * private key.
+/**
+ * @brief Validates the requesting client NAS.  Calculates the
+ *	Response Authenticator based on the clients private key.
  */
 static int calc_replydigest(RADIUS_PACKET *packet, RADIUS_PACKET *original,
 			    char const *secret)
@@ -2229,17 +2196,14 @@ static int calc_replydigest(RADIUS_PACKET *packet, RADIUS_PACKET *original,
 	return 0;
 }
 
-/** Check if a set of RADIUS formatted TLVs are OK
- *
+
+/**
+ * @brief Check if a set of RADIUS formatted TLVs are OK.
  */
 int rad_tlv_ok(uint8_t const *data, size_t length,
 	       size_t dv_type, size_t dv_length)
 {
 	uint8_t const *end = data + length;
-
-	VP_TRACE("checking TLV %u/%u\n", (unsigned int) dv_type, (unsigned int) dv_length);
-
-	VP_HEXDUMP("tlv_ok", data, length);
 
 	if ((dv_length > 2) || (dv_type == 0) || (dv_type > 4)) {
 		fr_strerror_printf("rad_tlv_ok: Invalid arguments");
@@ -2274,10 +2238,7 @@ int rad_tlv_ok(uint8_t const *data, size_t length,
 			break;
 
 		case 1:
-			/*
-			 *	Zero is allowed, because the Colubris
-			 *	people are dumb and use it.
-			 */
+			if (data[0] == 0) goto zero;
 			break;
 
 		default:
@@ -2290,7 +2251,7 @@ int rad_tlv_ok(uint8_t const *data, size_t length,
 			return 0;
 
 		case 2:
-			if (data[dv_type] != 0) {
+			if (data[dv_type + 1] != 0) {
 				fr_strerror_printf("Attribute is longer than 256 octets");
 				return -1;
 			}
@@ -2344,8 +2305,6 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 	bool			seen_ma = false;
 	uint32_t		num_attributes;
 	decode_fail_t		failure = DECODE_FAIL_NONE;
-	bool			eap = false;
-	bool			non_eap = false;
 
 	/*
 	 *	Check for packets smaller than the packet header.
@@ -2355,7 +2314,7 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 	 *	"The minimum length is 20 ..."
 	 */
 	if (packet->data_len < RADIUS_HDR_LEN) {
-		FR_DEBUG_STRERROR_PRINTF("Malformed RADIUS packet from host %s: too short (received %zu < minimum %d)",
+		fr_strerror_printf("WARNING: Malformed RADIUS packet from host %s: too short (received %zu < minimum %d)",
 			   inet_ntop(packet->src_ipaddr.af,
 				     &packet->src_ipaddr.ipaddr,
 				     host_ipaddr, sizeof(host_ipaddr)),
@@ -2379,7 +2338,7 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 	 */
 	if ((hdr->code == 0) ||
 	    (hdr->code >= FR_MAX_PACKET_CODE)) {
-		FR_DEBUG_STRERROR_PRINTF("Bad RADIUS packet from host %s: unknown packet code %d",
+		fr_strerror_printf("WARNING: Bad RADIUS packet from host %s: unknown packet code %d",
 			   inet_ntop(packet->src_ipaddr.af,
 				     &packet->src_ipaddr.ipaddr,
 				     host_ipaddr, sizeof(host_ipaddr)),
@@ -2411,7 +2370,7 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 	 *	"The minimum length is 20 ..."
 	 */
 	if (totallen < RADIUS_HDR_LEN) {
-		FR_DEBUG_STRERROR_PRINTF("Malformed RADIUS packet from host %s: too short (length %zu < minimum %d)",
+		fr_strerror_printf("WARNING: Malformed RADIUS packet from host %s: too short (length %zu < minimum %d)",
 			   inet_ntop(packet->src_ipaddr.af,
 				     &packet->src_ipaddr.ipaddr,
 				     host_ipaddr, sizeof(host_ipaddr)),
@@ -2444,7 +2403,7 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 	 *	i.e. No response to the NAS.
 	 */
 	if (packet->data_len < totallen) {
-		FR_DEBUG_STRERROR_PRINTF("Malformed RADIUS packet from host %s: received %zu octets, packet length says %zu",
+		fr_strerror_printf("WARNING: Malformed RADIUS packet from host %s: received %zu octets, packet length says %zu",
 			   inet_ntop(packet->src_ipaddr.af,
 				     &packet->src_ipaddr.ipaddr,
 				     host_ipaddr, sizeof(host_ipaddr)),
@@ -2490,7 +2449,7 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 		 *	attribute header.
 		 */
 		if (count < 2) {
-			FR_DEBUG_STRERROR_PRINTF("Malformed RADIUS packet from host %s: attribute header overflows the packet",
+			fr_strerror_printf("WARNING: Malformed RADIUS packet from host %s: attribute header overflows the packet",
 				   inet_ntop(packet->src_ipaddr.af,
 					     &packet->src_ipaddr.ipaddr,
 					     host_ipaddr, sizeof(host_ipaddr)));
@@ -2502,7 +2461,7 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 		 *	Attribute number zero is NOT defined.
 		 */
 		if (attr[0] == 0) {
-			FR_DEBUG_STRERROR_PRINTF("Malformed RADIUS packet from host %s: Invalid attribute 0",
+			fr_strerror_printf("WARNING: Malformed RADIUS packet from host %s: Invalid attribute 0",
 				   inet_ntop(packet->src_ipaddr.af,
 					     &packet->src_ipaddr.ipaddr,
 					     host_ipaddr, sizeof(host_ipaddr)));
@@ -2515,7 +2474,7 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 		 *	fields.  Anything shorter is an invalid attribute.
 		 */
 		if (attr[1] < 2) {
-			FR_DEBUG_STRERROR_PRINTF("Malformed RADIUS packet from host %s: attribute %u too short",
+			fr_strerror_printf("WARNING: Malformed RADIUS packet from host %s: attribute %u too short",
 				   inet_ntop(packet->src_ipaddr.af,
 					     &packet->src_ipaddr.ipaddr,
 					     host_ipaddr, sizeof(host_ipaddr)),
@@ -2529,7 +2488,7 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 		 *	attribute, it's a bad packet.
 		 */
 		if (count < attr[1]) {
-			FR_DEBUG_STRERROR_PRINTF("Malformed RADIUS packet from host %s: attribute %u data overflows the packet",
+			fr_strerror_printf("WARNING: Malformed RADIUS packet from host %s: attribute %u data overflows the packet",
 				   inet_ntop(packet->src_ipaddr.af,
 					     &packet->src_ipaddr.ipaddr,
 					     host_ipaddr, sizeof(host_ipaddr)),
@@ -2551,18 +2510,11 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 			 */
 		case PW_EAP_MESSAGE:
 			require_ma = true;
-			eap = true;
-			break;
-
-		case PW_USER_PASSWORD:
-		case PW_CHAP_PASSWORD:
-		case PW_ARAP_PASSWORD:
-			non_eap = true;
 			break;
 
 		case PW_MESSAGE_AUTHENTICATOR:
 			if (attr[1] != 2 + AUTH_VECTOR_LEN) {
-				FR_DEBUG_STRERROR_PRINTF("Malformed RADIUS packet from host %s: Message-Authenticator has invalid length %d",
+				fr_strerror_printf("WARNING: Malformed RADIUS packet from host %s: Message-Authenticator has invalid length %d",
 					   inet_ntop(packet->src_ipaddr.af,
 						     &packet->src_ipaddr.ipaddr,
 						     host_ipaddr, sizeof(host_ipaddr)),
@@ -2591,7 +2543,7 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 	 *	If not, we complain, and throw the packet away.
 	 */
 	if (count != 0) {
-		FR_DEBUG_STRERROR_PRINTF("Malformed RADIUS packet from host %s: packet attributes do NOT exactly fill the packet",
+		fr_strerror_printf("WARNING: Malformed RADIUS packet from host %s: packet attributes do NOT exactly fill the packet",
 			   inet_ntop(packet->src_ipaddr.af,
 				     &packet->src_ipaddr.ipaddr,
 				     host_ipaddr, sizeof(host_ipaddr)));
@@ -2606,7 +2558,7 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 	 */
 	if ((fr_max_attributes > 0) &&
 	    (num_attributes > fr_max_attributes)) {
-		FR_DEBUG_STRERROR_PRINTF("Possible DoS attack from host %s: Too many attributes in request (received %d, max %d are allowed).",
+		fr_strerror_printf("WARNING: Possible DoS attack from host %s: Too many attributes in request (received %d, max %d are allowed).",
 			   inet_ntop(packet->src_ipaddr.af,
 				     &packet->src_ipaddr.ipaddr,
 				     host_ipaddr, sizeof(host_ipaddr)),
@@ -2627,20 +2579,11 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 	 *	Message-Authenticator attributes.
 	 */
 	if (require_ma && !seen_ma) {
-		FR_DEBUG_STRERROR_PRINTF("Insecure packet from host %s:  Packet does not contain required Message-Authenticator attribute",
+		fr_strerror_printf("WARNING: Insecure packet from host %s:  Packet does not contain required Message-Authenticator attribute",
 			   inet_ntop(packet->src_ipaddr.af,
 				     &packet->src_ipaddr.ipaddr,
 				     host_ipaddr, sizeof(host_ipaddr)));
 		failure = DECODE_FAIL_MA_MISSING;
-		goto finish;
-	}
-
-	if (eap && non_eap) {
-		FR_DEBUG_STRERROR_PRINTF("Bad packet from host %s:  Packet contains EAP-Message and non-EAP authentication attribute",
-			   inet_ntop(packet->src_ipaddr.af,
-				     &packet->src_ipaddr.ipaddr,
-				     host_ipaddr, sizeof(host_ipaddr)));
-		failure = DECODE_FAIL_TOO_MANY_AUTH;
 		goto finish;
 	}
 
@@ -2661,10 +2604,11 @@ bool rad_packet_ok(RADIUS_PACKET *packet, int flags, decode_fail_t *reason)
 }
 
 
-/** Receive UDP client requests, and fill in the basics of a RADIUS_PACKET structure
- *
+/**
+ * @brief Receive UDP client requests, and fill in
+ *	the basics of a RADIUS_PACKET structure.
  */
-RADIUS_PACKET *rad_recv(TALLOC_CTX *ctx, int fd, int flags)
+RADIUS_PACKET *rad_recv(int fd, int flags)
 {
 	int sock_flags = 0;
 	ssize_t data_len;
@@ -2673,7 +2617,7 @@ RADIUS_PACKET *rad_recv(TALLOC_CTX *ctx, int fd, int flags)
 	/*
 	 *	Allocate the new request data structure
 	 */
-	packet = rad_alloc(ctx, false);
+	packet = rad_alloc(NULL, false);
 	if (!packet) {
 		fr_strerror_printf("out of memory");
 		return NULL;
@@ -2692,7 +2636,7 @@ RADIUS_PACKET *rad_recv(TALLOC_CTX *ctx, int fd, int flags)
 	 *	Check for socket errors.
 	 */
 	if (data_len < 0) {
-		FR_DEBUG_STRERROR_PRINTF("Error receiving packet: %s", fr_syserror(errno));
+		fr_strerror_printf("Error receiving packet: %s", fr_syserror(errno));
 		/* packet->data is NULL */
 		rad_free(&packet);
 		return NULL;
@@ -2705,7 +2649,7 @@ RADIUS_PACKET *rad_recv(TALLOC_CTX *ctx, int fd, int flags)
 	 *	packet.
 	 */
 	if (packet->data_len > MAX_PACKET_LEN) {
-		FR_DEBUG_STRERROR_PRINTF("Discarding packet: Larger than RFC limitation of 4096 bytes");
+		fr_strerror_printf("Discarding packet: Larger than RFC limitation of 4096 bytes");
 		/* packet->data is NULL */
 		rad_free(&packet);
 		return NULL;
@@ -2718,7 +2662,7 @@ RADIUS_PACKET *rad_recv(TALLOC_CTX *ctx, int fd, int flags)
 	 *	packet->data == NULL
 	 */
 	if ((packet->data_len == 0) || !packet->data) {
-		FR_DEBUG_STRERROR_PRINTF("Empty packet: Socket is not ready");
+		fr_strerror_printf("Empty packet: Socket is not ready");
 		rad_free(&packet);
 		return NULL;
 	}
@@ -2747,24 +2691,57 @@ RADIUS_PACKET *rad_recv(TALLOC_CTX *ctx, int fd, int flags)
 	 */
 	packet->vps = NULL;
 
+	if (fr_debug_flag) {
+		char src_ipaddr[128];
+		char dst_ipaddr[128];
+
+		if (is_radius_code(packet->code)) {
+			DEBUG("Received %s Id %d from %s:%d to %s:%d length %d\n",
+			      fr_packet_codes[packet->code],
+			      packet->id,
+			      inet_ntop(packet->src_ipaddr.af,
+					&packet->src_ipaddr.ipaddr,
+					src_ipaddr, sizeof(src_ipaddr)),
+			      packet->src_port,
+			      inet_ntop(packet->dst_ipaddr.af,
+					&packet->dst_ipaddr.ipaddr,
+					dst_ipaddr, sizeof(dst_ipaddr)),
+			      packet->dst_port,
+			      (int) packet->data_len);
+		} else {
+			DEBUG("Received code %d Id %d from %s:%d to %s:%d length %d\n",
+			      packet->code,
+			      packet->id,
+			      inet_ntop(packet->src_ipaddr.af,
+					&packet->src_ipaddr.ipaddr,
+					src_ipaddr, sizeof(src_ipaddr)),
+			      packet->src_port,
+			      inet_ntop(packet->dst_ipaddr.af,
+					&packet->dst_ipaddr.ipaddr,
+					dst_ipaddr, sizeof(dst_ipaddr)),
+			      packet->dst_port,
+			      (int) packet->data_len);
+		}
+	}
+
 #ifndef NDEBUG
-	if ((fr_debug_lvl > 3) && fr_log_fp) rad_print_hex(packet);
+	if ((fr_debug_flag > 3) && fr_log_fp) rad_print_hex(packet);
 #endif
 
 	return packet;
 }
 
 
-/** Verify the Request/Response Authenticator (and Message-Authenticator if present) of a packet
- *
+/**
+ * @brief Verify the Request/Response Authenticator
+ * 	(and Message-Authenticator if present) of a packet.
  */
-int rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original, char const *secret)
+int rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original,
+	       char const *secret)
 {
-	uint8_t		*ptr;
-	int		length;
-	int		attrlen;
-	int		rcode;
-	char		buffer[32];
+	uint8_t			*ptr;
+	int			length;
+	int			attrlen;
 
 	if (!packet || !packet->data) return -1;
 
@@ -2817,8 +2794,7 @@ int rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original, char const *secre
 			case PW_CODE_COA_ACK:
 			case PW_CODE_COA_NAK:
 				if (!original) {
-					fr_strerror_printf("Cannot validate Message-Authenticator in response "
-							   "packet without a request packet");
+					fr_strerror_printf("ERROR: Cannot validate Message-Authenticator in response packet without a request packet");
 					return -1;
 				}
 				memcpy(packet->data + 4, original->vector, AUTH_VECTOR_LEN);
@@ -2829,11 +2805,11 @@ int rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original, char const *secre
 				    (uint8_t const *) secret, strlen(secret));
 			if (rad_digest_cmp(calc_auth_vector, msg_auth_vector,
 				   sizeof(calc_auth_vector)) != 0) {
-				fr_strerror_printf("Received packet from %s with invalid Message-Authenticator!  "
-						   "(Shared secret is incorrect.)",
-						   inet_ntop(packet->src_ipaddr.af,
-							     &packet->src_ipaddr.ipaddr,
-							     buffer, sizeof(buffer)));
+				char buffer[32];
+				fr_strerror_printf("Received packet from %s with invalid Message-Authenticator!  (Shared secret is incorrect.)",
+					   inet_ntop(packet->src_ipaddr.af,
+						     &packet->src_ipaddr.ipaddr,
+						     buffer, sizeof(buffer)));
 				/* Silently drop packet, according to RFC 3579 */
 				return -1;
 			} /* else the message authenticator was good */
@@ -2855,13 +2831,14 @@ int rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original, char const *secre
 	 *	so can't validate the authenticators.
 	 */
 	if ((packet->code == 0) || (packet->code >= FR_MAX_PACKET_CODE)) {
+		char buffer[32];
 		fr_strerror_printf("Received Unknown packet code %d "
-				   "from client %s port %d: Cannot validate Request/Response Authenticator.",
-				   packet->code,
-				   inet_ntop(packet->src_ipaddr.af,
-				             &packet->src_ipaddr.ipaddr,
-				             buffer, sizeof(buffer)),
-				   packet->src_port);
+			   "from client %s port %d: Cannot validate Request/Response Authenticator.",
+			   packet->code,
+			   inet_ntop(packet->src_ipaddr.af,
+				     &packet->src_ipaddr.ipaddr,
+				     buffer, sizeof(buffer)),
+			   packet->src_port);
 		return -1;
 	}
 
@@ -2869,6 +2846,9 @@ int rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original, char const *secre
 	 *	Calculate and/or verify Request or Response Authenticator.
 	 */
 	switch (packet->code) {
+	int rcode;
+	char buffer[32];
+
 	case PW_CODE_ACCESS_REQUEST:
 	case PW_CODE_STATUS_SERVER:
 		/*
@@ -2882,12 +2862,11 @@ int rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original, char const *secre
 	case PW_CODE_ACCOUNTING_REQUEST:
 		if (calc_acctdigest(packet, secret) > 1) {
 			fr_strerror_printf("Received %s packet "
-					   "from client %s with invalid Request Authenticator!  "
-					   "(Shared secret is incorrect.)",
-					   fr_packet_codes[packet->code],
-					   inet_ntop(packet->src_ipaddr.af,
-						     &packet->src_ipaddr.ipaddr,
-						     buffer, sizeof(buffer)));
+				   "from client %s with invalid Request Authenticator!  (Shared secret is incorrect.)",
+				   fr_packet_codes[packet->code],
+				   inet_ntop(packet->src_ipaddr.af,
+					     &packet->src_ipaddr.ipaddr,
+					     buffer, sizeof(buffer)));
 			return -1;
 		}
 		break;
@@ -2904,25 +2883,24 @@ int rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original, char const *secre
 		rcode = calc_replydigest(packet, original, secret);
 		if (rcode > 1) {
 			fr_strerror_printf("Received %s packet "
-					   "from home server %s port %d with invalid Response Authenticator!  "
-					   "(Shared secret is incorrect.)",
-					   fr_packet_codes[packet->code],
-					   inet_ntop(packet->src_ipaddr.af,
-						     &packet->src_ipaddr.ipaddr,
-						     buffer, sizeof(buffer)),
-					   packet->src_port);
+				   "from home server %s port %d with invalid Response Authenticator!  (Shared secret is incorrect.)",
+				   fr_packet_codes[packet->code],
+				   inet_ntop(packet->src_ipaddr.af,
+					     &packet->src_ipaddr.ipaddr,
+					     buffer, sizeof(buffer)),
+				   packet->src_port);
 			return -1;
 		}
 		break;
 
 	default:
 		fr_strerror_printf("Received Unknown packet code %d "
-				   "from client %s port %d: Cannot validate Request/Response Authenticator",
-				   packet->code,
-				   inet_ntop(packet->src_ipaddr.af,
-				             &packet->src_ipaddr.ipaddr,
-				             buffer, sizeof(buffer)),
-				   packet->src_port);
+			   "from client %s port %d: Cannot validate Request/Response Authenticator",
+			   packet->code,
+			   inet_ntop(packet->src_ipaddr.af,
+				     &packet->src_ipaddr.ipaddr,
+					     buffer, sizeof(buffer)),
+			   packet->src_port);
 		return -1;
 	}
 
@@ -2930,8 +2908,8 @@ int rad_verify(RADIUS_PACKET *packet, RADIUS_PACKET *original, char const *secre
 }
 
 
-/** Convert a "concatenated" attribute to one long VP
- *
+/**
+ * @brief convert a "concatenated" attribute to one long VP.
  */
 static ssize_t data2vp_concat(TALLOC_CTX *ctx,
 			      DICT_ATTR const *da, uint8_t const *start,
@@ -2962,19 +2940,19 @@ static ssize_t data2vp_concat(TALLOC_CTX *ctx,
 		if (ptr[0] != attr) break;
 	}
 
-	vp = fr_pair_afrom_da(ctx, da);
+	vp = pairalloc(ctx, da);
 	if (!vp) return -1;
 
-	vp->vp_length = total;
-	vp->vp_octets = p = talloc_array(vp, uint8_t, vp->vp_length);
+	vp->length = total;
+	vp->vp_octets = p = talloc_array(vp, uint8_t, vp->length);
 	if (!p) {
-		fr_pair_list_free(&vp);
+		pairfree(&vp);
 		return -1;
 	}
 
 	total = 0;
 	ptr = start;
-	while (total < vp->vp_length) {
+	while (total < vp->length) {
 		memcpy(p, ptr + 2, ptr[1] - 2);
 		p += ptr[1] - 2;
 		total += ptr[1] - 2;
@@ -2986,10 +2964,10 @@ static ssize_t data2vp_concat(TALLOC_CTX *ctx,
 }
 
 
-/** Convert TLVs to one or more VPs
- *
+/**
+ * @brief convert TLVs to one or more VPs
  */
-ssize_t rad_data2vp_tlvs(TALLOC_CTX *ctx,
+static ssize_t data2vp_tlvs(TALLOC_CTX *ctx,
 			    RADIUS_PACKET *packet, RADIUS_PACKET const *original,
 			    char const *secret, DICT_ATTR const *da,
 			    uint8_t const *start, size_t length,
@@ -3026,13 +3004,13 @@ ssize_t rad_data2vp_tlvs(TALLOC_CTX *ctx,
 			my_vendor = da->vendor;
 
 			if (!dict_attr_child(da, &my_attr, &my_vendor)) {
-				fr_pair_list_free(&head);
+				pairfree(&head);
 				return -1;
 			}
 
-			child = dict_unknown_afrom_fields(ctx, my_attr, my_vendor);
+			child = dict_attrunknown(my_attr, my_vendor, true);
 			if (!child) {
-				fr_pair_list_free(&head);
+				pairfree(&head);
 				return -1;
 			}
 		}
@@ -3040,10 +3018,10 @@ ssize_t rad_data2vp_tlvs(TALLOC_CTX *ctx,
 		tlv_len = data2vp(ctx, packet, original, secret, child,
 				  data + 2, data[1] - 2, data[1] - 2, tail);
 		if (tlv_len < 0) {
-			fr_pair_list_free(&head);
+			pairfree(&head);
 			return -1;
 		}
-		if (*tail) tail = &((*tail)->next);
+		tail = &((*tail)->next);
 		data += data[1];
 	}
 
@@ -3051,9 +3029,10 @@ ssize_t rad_data2vp_tlvs(TALLOC_CTX *ctx,
 	return length;
 }
 
-/** Convert a top-level VSA to a VP.
+/**
+ * @brief Convert a top-level VSA to a VP.
  *
- * "length" can be LONGER than just this sub-vsa.
+ *	"length" can be LONGER than just this sub-vsa
  */
 static ssize_t data2vp_vsa(TALLOC_CTX *ctx, RADIUS_PACKET *packet,
 			   RADIUS_PACKET const *original,
@@ -3064,8 +3043,6 @@ static ssize_t data2vp_vsa(TALLOC_CTX *ctx, RADIUS_PACKET *packet,
 	unsigned int attribute;
 	ssize_t attrlen, my_len;
 	DICT_ATTR const *da;
-
-	VP_TRACE("data2vp_vsa: length %u\n", (unsigned int) length);
 
 #ifndef NDEBUG
 	if (length <= (dv->type + dv->length)) {
@@ -3115,11 +3092,18 @@ static ssize_t data2vp_vsa(TALLOC_CTX *ctx, RADIUS_PACKET *packet,
 		return -1;
 	}
 
+#ifndef NDEBUG
+	if (attrlen <= (ssize_t) (dv->type + dv->length)) {
+		fr_strerror_printf("data2vp_vsa: Failure to call rad_tlv_ok");
+		return -1;
+	}
+#endif
+
 	/*
 	 *	See if the VSA is known.
 	 */
 	da = dict_attrbyvalue(attribute, dv->vendorpec);
-	if (!da) da = dict_unknown_afrom_fields(ctx, attribute, dv->vendorpec);
+	if (!da) da = dict_attrunknown(attribute, dv->vendorpec, true);
 	if (!da) return -1;
 
 	my_len = data2vp(ctx, packet, original, secret, da,
@@ -3133,17 +3117,19 @@ static ssize_t data2vp_vsa(TALLOC_CTX *ctx, RADIUS_PACKET *packet,
 }
 
 
-/** Convert a fragmented extended attr to a VP
+/**
+ * @brief Convert a fragmented extended attr to a VP
  *
- * Format is:
+ *	Format is:
  *
- * attr
- * length
- * extended-attr
- * flag
- * data...
+ *	attr
+ *	length
+ *	extended-attr
+ *	flag
+ *	data...
  *
- * But for the first fragment, we get passed a pointer to the "extended-attr"
+ *	But for the first fragment, we get passed a pointer to the
+ *	"extended-attr".
  */
 static ssize_t data2vp_extended(TALLOC_CTX *ctx, RADIUS_PACKET *packet,
 				RADIUS_PACKET const *original,
@@ -3221,9 +3207,10 @@ static ssize_t data2vp_extended(TALLOC_CTX *ctx, RADIUS_PACKET *packet,
 	return end - data;
 }
 
-/** Convert a Vendor-Specific WIMAX to vps
+/**
+ * @brief Convert a Vendor-Specific WIMAX to vps
  *
- * @note Called ONLY for Vendor-Specific
+ *	Called ONLY for Vendor-Specific
  */
 static ssize_t data2vp_wimax(TALLOC_CTX *ctx,
 			     RADIUS_PACKET *packet, RADIUS_PACKET const *original,
@@ -3320,8 +3307,8 @@ static ssize_t data2vp_wimax(TALLOC_CTX *ctx,
 }
 
 
-/** Convert a top-level VSA to one or more VPs
- *
+/**
+ * @brief Convert a top-level VSA to one or more VPs
  */
 static ssize_t data2vp_vsas(TALLOC_CTX *ctx, RADIUS_PACKET *packet,
 			    RADIUS_PACKET const *original,
@@ -3334,41 +3321,15 @@ static ssize_t data2vp_vsas(TALLOC_CTX *ctx, RADIUS_PACKET *packet,
 	uint32_t vendor;
 	DICT_VENDOR *dv;
 	VALUE_PAIR *head, **tail;
-	DICT_VENDOR my_dv;
 
 	if (attrlen > packetlen) return -1;
 	if (attrlen < 5) return -1; /* vid, value */
 	if (data[0] != 0) return -1; /* we require 24-bit VIDs */
 
-	VP_TRACE("data2vp_vsas\n");
-
 	memcpy(&vendor, data, 4);
 	vendor = ntohl(vendor);
 	dv = dict_vendorbyvalue(vendor);
-	if (!dv) {
-		/*
-		 *	RFC format is 1 octet type, 1 octet length
-		 */
-		if (rad_tlv_ok(data + 4, attrlen - 4, 1, 1) < 0) {
-			VP_TRACE("data2vp_vsas: unknown tlvs not OK: %s\n", fr_strerror());
-			return -1;
-		}
-
-		/*
-		 *	It's a known unknown.
-		 */
-		memset(&my_dv, 0, sizeof(my_dv));
-		dv = &my_dv;
-
-		/*
-		 *	Fill in the fields.  Note that the name is empty!
-		 */
-		dv->vendorpec = vendor;
-		dv->type = 1;
-		dv->length = 1;
-
-		goto create_attrs;
-	}
+	if (!dv) return -1;
 
 	/*
 	 *	WiMAX craziness
@@ -3383,16 +3344,12 @@ static ssize_t data2vp_vsas(TALLOC_CTX *ctx, RADIUS_PACKET *packet,
 	 *	VSAs should normally be in TLV format.
 	 */
 	if (rad_tlv_ok(data + 4, attrlen - 4,
-		       dv->type, dv->length) < 0) {
-		VP_TRACE("data2vp_vsas: tlvs not OK: %s\n", fr_strerror());
-		return -1;
-	}
+		       dv->type, dv->length) < 0) return -1;
 
 	/*
 	 *	There may be more than one VSA in the
 	 *	Vendor-Specific.  If so, loop over them all.
 	 */
-create_attrs:
 	data += 4;
 	attrlen -= 4;
 	packetlen -= 4;
@@ -3406,16 +3363,11 @@ create_attrs:
 		vsa_len = data2vp_vsa(ctx, packet, original, secret, dv,
 				      data, attrlen, tail);
 		if (vsa_len < 0) {
-			fr_pair_list_free(&head);
+			pairfree(&head);
 			fr_strerror_printf("Internal sanity check %d", __LINE__);
 			return -1;
 		}
-
-		/*
-		 *	Vendors can send zero-length VSAs.
-		 */
-		if (*tail) tail = &((*tail)->next);
-
+		tail = &((*tail)->next);
 		data += vsa_len;
 		attrlen -= vsa_len;
 		packetlen -= vsa_len;
@@ -3426,12 +3378,14 @@ create_attrs:
 	return total;
 }
 
-/** Create any kind of VP from the attribute contents
+
+/**
+ * @brief Create any kind of VP from the attribute contents.
  *
- * "length" is AT LEAST the length of this attribute, as we
- * expect the caller to have verified the data with
- * rad_packet_ok().  "length" may be up to the length of the
- * packet.
+ *	"length" is AT LEAST the length of this attribute, as we
+ *	expect the caller to have verified the data with
+ *	rad_packet_ok().  "length" may be up to the length of the
+ *	packet.
  *
  * @return -1 on error, or "length".
  */
@@ -3447,6 +3401,7 @@ ssize_t data2vp(TALLOC_CTX *ctx,
 	ssize_t rcode;
 	uint32_t vendor;
 	DICT_ATTR const *child;
+	DICT_VENDOR *dv;
 	VALUE_PAIR *vp;
 	uint8_t const *data = start;
 	char *p;
@@ -3529,7 +3484,6 @@ ssize_t data2vp(TALLOC_CTX *ctx,
 	 *	Decrypt the attribute.
 	 */
 	if (secret && packet && (da->flags.encrypt != FLAG_ENCRYPT_NONE)) {
-		VP_TRACE("data2vp: decrypting type %u\n", da->flags.encrypt);
 		/*
 		 *	Encrypted attributes can only exist for the
 		 *	old-style format.  Extended attributes CANNOT
@@ -3559,29 +3513,7 @@ ssize_t data2vp(TALLOC_CTX *ctx,
 					     packet->vector);
 			}
 			buffer[253] = '\0';
-
-			/*
-			 *	MS-CHAP-MPPE-Keys are 24 octets, and
-			 *	encrypted.  Since it's binary, we can't
-			 *	look for trailing zeros.
-			 */
-			if (da->flags.length) {
-				if (datalen > da->flags.length) {
-					datalen = da->flags.length;
-				} /* else leave datalen alone */
-			} else {
-				/*
-				 *	Take off trailing zeros from the END.
-				 *	This allows passwords to have zeros in
-				 *	the middle of a field.
-				 *
-				 *	However, if the password has a zero at
-				 *	the end, it will get mashed by this
-				 *	code.  There's really no way around
-				 *	that.
-				 */
-				while ((datalen > 0) && (buffer[datalen - 1] == '\0')) datalen--;
-			}
+			datalen = strlen((char *) buffer);
 			break;
 
 		/*
@@ -3624,7 +3556,6 @@ ssize_t data2vp(TALLOC_CTX *ctx,
 	 *	Double-check the length after decrypting the
 	 *	attribute.
 	 */
-	VP_TRACE("data2vp: type %u\n", da->type);
 	switch (da->type) {
 	case PW_TYPE_STRING:
 	case PW_TYPE_OCTETS:
@@ -3667,7 +3598,7 @@ ssize_t data2vp(TALLOC_CTX *ctx,
 		if (datalen != 6) goto raw;
 		break;
 
-	case PW_TYPE_COMBO_IP_ADDR:
+	case PW_TYPE_IP_ADDR:
 		if (datalen == 4) {
 			child = dict_attrbytype(da->attr, da->vendor,
 						PW_TYPE_IPV4_ADDR);
@@ -3716,7 +3647,7 @@ ssize_t data2vp(TALLOC_CTX *ctx,
 			if ((data[0] != PW_VENDOR_SPECIFIC) ||
 			    (datalen < (3 + 4 + 1))) {
 				/* da->attr < 255, da->vendor == 0 */
-				child = dict_unknown_afrom_fields(ctx, data[0], da->attr * FR_MAX_VENDOR);
+				child = dict_attrunknown(data[0], da->attr * FR_MAX_VENDOR, true);
 			} else {
 				/*
 				 *	Try to find the VSA.
@@ -3726,7 +3657,7 @@ ssize_t data2vp(TALLOC_CTX *ctx,
 
 				if (vendor == 0) goto raw;
 
-				child = dict_unknown_afrom_fields(ctx, data[7], vendor | (da->attr * FR_MAX_VENDOR));
+				child = dict_attrunknown(data[7], vendor | (da->attr * FR_MAX_VENDOR), true);
 			}
 
 			if (!child) {
@@ -3761,19 +3692,16 @@ ssize_t data2vp(TALLOC_CTX *ctx,
 
 		memcpy(&vendor, data, 4);
 		vendor = ntohl(vendor);
-		vendor |= da->vendor;
-
-		child = dict_attrbyvalue(data[4], vendor);
-		if (!child) {
-			/*
-			 *	Create a "raw" attribute from the
-			 *	contents of the EVS VSA.
-			 */
-			da = dict_unknown_afrom_fields(ctx, data[4], vendor);
-			data += 5;
-			datalen -= 5;
-			break;
+		dv = dict_vendorbyvalue(vendor);
+		if (!dv) {
+			child = dict_attrunknown(data[4], da->vendor | vendor, true);
+		} else {
+			child = dict_attrbyparent(da, data[4], vendor);
+			if (!child) {
+				child = dict_attrunknown(data[4], da->vendor | vendor, true);
+			}
 		}
+		if (!child) goto raw;
 
 		rcode = data2vp(ctx, packet, original, secret, child,
 				data + 5, attrlen - 5, attrlen - 5, pvp);
@@ -3786,8 +3714,8 @@ ssize_t data2vp(TALLOC_CTX *ctx,
 		 *	attribute, OR they've already been grouped
 		 *	into a contiguous memory buffer.
 		 */
-		rcode = rad_data2vp_tlvs(ctx, packet, original, secret, da,
-					 data, attrlen, pvp);
+		rcode = data2vp_tlvs(ctx, packet, original, secret, da,
+				     data, attrlen, pvp);
 		if (rcode < 0) goto raw;
 		return rcode;
 
@@ -3808,7 +3736,7 @@ ssize_t data2vp(TALLOC_CTX *ctx,
 		 *	therefore of type "octets", and will be
 		 *	handled below.
 		 */
-		da = dict_unknown_afrom_fields(ctx, da->attr, da->vendor);
+		da = dict_attrunknown(da->attr, da->vendor, true);
 		if (!da) {
 			fr_strerror_printf("Internal sanity check %d", __LINE__);
 			return -1;
@@ -3831,29 +3759,29 @@ ssize_t data2vp(TALLOC_CTX *ctx,
 	 *	information, decode the actual data.
 	 */
  alloc_cui:
-	vp = fr_pair_afrom_da(ctx, da);
+	vp = pairalloc(ctx, da);
 	if (!vp) return -1;
 
-	vp->vp_length = datalen;
+	vp->length = datalen;
 	vp->tag = tag;
 
 	switch (da->type) {
 	case PW_TYPE_STRING:
-		p = talloc_array(vp, char, vp->vp_length + 1);
-		memcpy(p, data, vp->vp_length);
-		p[vp->vp_length] = '\0';
+		p = talloc_array(vp, char, vp->length + 1);
+		memcpy(p, data, vp->length);
+		p[vp->length] = '\0';
 		vp->vp_strvalue = p;
 		break;
 
 	case PW_TYPE_OCTETS:
-		fr_pair_value_memcpy(vp, data, vp->vp_length);
+		pairmemcpy(vp, data, vp->length);
 		break;
 
 	case PW_TYPE_ABINARY:
-		if (vp->vp_length > sizeof(vp->vp_filter)) {
-			vp->vp_length = sizeof(vp->vp_filter);
+		if (vp->length > sizeof(vp->vp_filter)) {
+			vp->length = sizeof(vp->vp_filter);
 		}
-		memcpy(vp->vp_filter, data, vp->vp_length);
+		memcpy(vp->vp_filter, data, vp->length);
 		break;
 
 	case PW_TYPE_BYTE:
@@ -3880,7 +3808,7 @@ ssize_t data2vp(TALLOC_CTX *ctx,
 		break;
 
 	case PW_TYPE_ETHERNET:
-		memcpy(vp->vp_ether, data, 6);
+		memcpy(&vp->vp_ether, data, 6);
 		break;
 
 	case PW_TYPE_IPV4_ADDR:
@@ -3888,7 +3816,7 @@ ssize_t data2vp(TALLOC_CTX *ctx,
 		break;
 
 	case PW_TYPE_IFID:
-		memcpy(vp->vp_ifid, data, 8);
+		memcpy(&vp->vp_ifid, data, 8);
 		break;
 
 	case PW_TYPE_IPV6_ADDR:
@@ -3898,18 +3826,18 @@ ssize_t data2vp(TALLOC_CTX *ctx,
 	case PW_TYPE_IPV6_PREFIX:
 		/*
 		 *	FIXME: double-check that
-		 *	(vp->vp_octets[1] >> 3) matches vp->vp_length + 2
+		 *	(vp->vp_octets[1] >> 3) matches vp->length + 2
 		 */
-		memcpy(vp->vp_ipv6prefix, data, vp->vp_length);
-		if (vp->vp_length < 18) {
-			memset(((uint8_t *)vp->vp_ipv6prefix) + vp->vp_length, 0,
-			       18 - vp->vp_length);
+		memcpy(&vp->vp_ipv6prefix, data, vp->length);
+		if (vp->length < 18) {
+			memset(((uint8_t *)vp->vp_ipv6prefix) + vp->length, 0,
+			       18 - vp->length);
 		}
 		break;
 
 	case PW_TYPE_IPV4_PREFIX:
 		/* FIXME: do the same double-check as for IPv6Prefix */
-		memcpy(vp->vp_ipv4prefix, data, vp->vp_length);
+		memcpy(&vp->vp_ipv4prefix, data, vp->length);
 
 		/*
 		 *	/32 means "keep all bits".  Otherwise, mask
@@ -3935,7 +3863,7 @@ ssize_t data2vp(TALLOC_CTX *ctx,
 		break;
 
 	default:
-		fr_pair_list_free(&vp);
+		pairfree(&vp);
 		fr_strerror_printf("Internal sanity check %d", __LINE__);
 		return -1;
 	}
@@ -3946,8 +3874,8 @@ ssize_t data2vp(TALLOC_CTX *ctx,
 }
 
 
-/** Create a "normal" VALUE_PAIR from the given data
- *
+/**
+ * @brief Create a "normal" VALUE_PAIR from the given data.
  */
 ssize_t rad_attr2vp(TALLOC_CTX *ctx,
 		    RADIUS_PACKET *packet, RADIUS_PACKET const *original,
@@ -3965,17 +3893,13 @@ ssize_t rad_attr2vp(TALLOC_CTX *ctx,
 	}
 
 	da = dict_attrbyvalue(data[0], 0);
-	if (!da) {
-		VP_TRACE("attr2vp: unknown attribute %u\n", data[0]);
-		da = dict_unknown_afrom_fields(ctx, data[0], 0);
-	}
+	if (!da) da = dict_attrunknown(data[0], 0, true);
 	if (!da) return -1;
 
 	/*
 	 *	Pass the entire thing to the decoding function
 	 */
 	if (da->flags.concat) {
-		VP_TRACE("attr2vp: concat attribute\n");
 		return data2vp_concat(ctx, da, data, length, pvp);
 	}
 
@@ -3992,7 +3916,7 @@ ssize_t rad_attr2vp(TALLOC_CTX *ctx,
 	return 2 + rcode;
 }
 
-fr_thread_local_setup(uint8_t *, rad_vp2data_buff)
+fr_thread_local_setup(uint8_t *, rad_vp2data_buff);
 
 /** Converts vp_data to network byte order
  *
@@ -4034,9 +3958,10 @@ ssize_t rad_vp2data(uint8_t const **out, VALUE_PAIR const *vp)
 
 	VERIFY_VP(vp);
 
-	switch (vp->da->type) {
+	switch(vp->da->type) {
 	case PW_TYPE_STRING:
 	case PW_TYPE_OCTETS:
+	case PW_TYPE_TLV:
 		memcpy(out, &vp->data.ptr, sizeof(*out));
 		break;
 
@@ -4050,8 +3975,8 @@ ssize_t rad_vp2data(uint8_t const **out, VALUE_PAIR const *vp)
 	case PW_TYPE_IPV4_PREFIX:
 	case PW_TYPE_ABINARY:
 	case PW_TYPE_ETHERNET:
-	case PW_TYPE_COMBO_IP_ADDR:
-	case PW_TYPE_COMBO_IP_PREFIX:
+	case PW_TYPE_IP_ADDR:
+	case PW_TYPE_IP_PREFIX:
 	{
 		void const *p = &vp->data;
 		memcpy(out, &p, sizeof(*out));
@@ -4059,18 +3984,18 @@ ssize_t rad_vp2data(uint8_t const **out, VALUE_PAIR const *vp)
 	}
 
 	case PW_TYPE_BOOLEAN:
-		buffer[0] = vp->vp_byte & 0x01;
+		buffer[0] = vp->vp_integer & 0x01;
 		*out = buffer;
 		break;
 
 	case PW_TYPE_BYTE:
-		buffer[0] = vp->vp_byte & 0xff;
+		buffer[0] = vp->vp_integer & 0xff;
 		*out = buffer;
 		break;
 
 	case PW_TYPE_SHORT:
-		buffer[0] = (vp->vp_short >> 8) & 0xff;
-		buffer[1] = vp->vp_short & 0xff;
+		buffer[0] = (vp->vp_integer >> 8) & 0xff;
+		buffer[1] = vp->vp_integer & 0xff;
 		*out = buffer;
 		break;
 
@@ -4105,7 +4030,6 @@ ssize_t rad_vp2data(uint8_t const **out, VALUE_PAIR const *vp)
 	case PW_TYPE_LONG_EXTENDED:
 	case PW_TYPE_EVS:
 	case PW_TYPE_VSA:
-	case PW_TYPE_TLV:
 	case PW_TYPE_TIMEVAL:
 	case PW_TYPE_MAX:
 		fr_strerror_printf("Cannot get data for VALUE_PAIR type %i", vp->da->type);
@@ -4114,11 +4038,11 @@ ssize_t rad_vp2data(uint8_t const **out, VALUE_PAIR const *vp)
 	/* Don't add default */
 	}
 
-	return vp->vp_length;
+	return vp->length;
 }
 
-/** Calculate/check digest, and decode radius attributes
- *
+/**
+ * @brief Calculate/check digest, and decode radius attributes.
  * @return -1 on decoding error, 0 on success
  */
 int rad_decode(RADIUS_PACKET *packet, RADIUS_PACKET *original,
@@ -4153,13 +4077,14 @@ int rad_decode(RADIUS_PACKET *packet, RADIUS_PACKET *original,
 		my_len = rad_attr2vp(packet, packet, original, secret,
 				     ptr, packet_length, &vp);
 		if (my_len < 0) {
-			fr_pair_list_free(&head);
+			pairfree(&head);
 			return -1;
 		}
 
 		*tail = vp;
 		while (vp) {
 			num_attributes++;
+			debug_pair(vp);
 			tail = &(vp->next);
 			vp = vp->next;
 		}
@@ -4174,8 +4099,8 @@ int rad_decode(RADIUS_PACKET *packet, RADIUS_PACKET *original,
 		    (num_attributes > fr_max_attributes)) {
 			char host_ipaddr[128];
 
-			fr_pair_list_free(&head);
-			fr_strerror_printf("Possible DoS attack from host %s: Too many attributes in request (received %d, max %d are allowed).",
+			pairfree(&head);
+			fr_strerror_printf("WARNING: Possible DoS attack from host %s: Too many attributes in request (received %d, max %d are allowed).",
 				   inet_ntop(packet->src_ipaddr.af,
 					     &packet->src_ipaddr.ipaddr,
 					     host_ipaddr, sizeof(host_ipaddr)),
@@ -4207,15 +4132,16 @@ int rad_decode(RADIUS_PACKET *packet, RADIUS_PACKET *original,
 }
 
 
-/** Encode password
+/**
+ * @brief Encode password.
  *
- * We assume that the passwd buffer passed is big enough.
- * RFC2138 says the password is max 128 chars, so the size
- * of the passwd buffer must be at least 129 characters.
- * Preferably it's just MAX_STRING_LEN.
+ *	We assume that the passwd buffer passed is big enough.
+ *	RFC2138 says the password is max 128 chars, so the size
+ *	of the passwd buffer must be at least 129 characters.
+ *	Preferably it's just MAX_STRING_LEN.
  *
- * int *pwlen is updated to the new length of the encrypted
- * password - a multiple of 16 bytes.
+ *	int *pwlen is updated to the new length of the encrypted
+ *	password - a multiple of 16 bytes.
  */
 int rad_pwencode(char *passwd, size_t *pwlen, char const *secret,
 		 uint8_t const *vector)
@@ -4279,8 +4205,8 @@ int rad_pwencode(char *passwd, size_t *pwlen, char const *secret,
 	return 0;
 }
 
-/** Decode password
- *
+/**
+ * @brief Decode password.
  */
 int rad_pwdecode(char *passwd, size_t pwlen, char const *secret,
 		 uint8_t const *vector)
@@ -4345,15 +4271,17 @@ int rad_pwdecode(char *passwd, size_t pwlen, char const *secret,
 }
 
 
-/** Encode Tunnel-Password attributes when sending them out on the wire
+/**
+ * @brief Encode Tunnel-Password attributes when sending them out on the wire.
  *
- * int *pwlen is updated to the new length of the encrypted
- * password - a multiple of 16 bytes.
+ *	int *pwlen is updated to the new length of the encrypted
+ *	password - a multiple of 16 bytes.
  *
- * This is per RFC-2868 which adds a two char SALT to the initial intermediate
- * value MD5 hash.
+ *      This is per RFC-2868 which adds a two char SALT to the initial intermediate
+ *      value MD5 hash.
  */
-ssize_t rad_tunnel_pwencode(char *passwd, size_t *pwlen, char const *secret, uint8_t const *vector)
+int rad_tunnel_pwencode(char *passwd, size_t *pwlen, char const *secret,
+			uint8_t const *vector)
 {
 	uint8_t	buffer[AUTH_VECTOR_LEN + MAX_STRING_LEN + 3];
 	unsigned char	digest[AUTH_VECTOR_LEN];
@@ -4366,15 +4294,14 @@ ssize_t rad_tunnel_pwencode(char *passwd, size_t *pwlen, char const *secret, uin
 	if (len > 127) len = 127;
 
 	/*
-	 *	Shift the password 3 positions right to place a salt and original
-	 *	length, tag will be added automatically on packet send.
+	 * Shift the password 3 positions right to place a salt and original
+	 * length, tag will be added automatically on packet send
 	 */
-	for (n = len ; n >= 0 ; n--) passwd[n + 3] = passwd[n];
+	for (n=len ; n>=0 ; n--) passwd[n+3] = passwd[n];
 	salt = passwd;
 	passwd += 2;
-
 	/*
-	 *	save original password length as first password character;
+	 * save original password length as first password character;
 	 */
 	*passwd = len;
 	len += 1;
@@ -4429,25 +4356,27 @@ ssize_t rad_tunnel_pwencode(char *passwd, size_t *pwlen, char const *secret, uin
 	return 0;
 }
 
-/** Decode Tunnel-Password encrypted attributes
+/**
+ * @brief Decode Tunnel-Password encrypted attributes.
  *
- * Defined in RFC-2868, this uses a two char SALT along with the
- * initial intermediate value, to differentiate it from the
- * above.
+ *      Defined in RFC-2868, this uses a two char SALT along with the
+ *      initial intermediate value, to differentiate it from the
+ *      above.
  */
-ssize_t rad_tunnel_pwdecode(uint8_t *passwd, size_t *pwlen, char const *secret, uint8_t const *vector)
+int rad_tunnel_pwdecode(uint8_t *passwd, size_t *pwlen, char const *secret,
+			uint8_t const *vector)
 {
 	FR_MD5_CTX  context, old;
 	uint8_t		digest[AUTH_VECTOR_LEN];
 	int		secretlen;
-	size_t		i, n, encrypted_len, reallen;
+	unsigned	i, n, len, reallen;
 
-	encrypted_len = *pwlen;
+	len = *pwlen;
 
 	/*
 	 *	We need at least a salt.
 	 */
-	if (encrypted_len < 2) {
+	if (len < 2) {
 		fr_strerror_printf("tunnel password is too short");
 		return -1;
 	}
@@ -4462,13 +4391,13 @@ ssize_t rad_tunnel_pwdecode(uint8_t *passwd, size_t *pwlen, char const *secret, 
 	 *	more data.  So the 'data_len' field may be wrong,
 	 *	but that's ok...
 	 */
-	if (encrypted_len <= 3) {
+	if (len <= 3) {
 		passwd[0] = 0;
 		*pwlen = 0;
 		return 0;
 	}
 
-	encrypted_len -= 2;		/* discount the salt */
+	len -= 2;		/* discount the salt */
 
 	/*
 	 *	Use the secret to setup the decryption digest
@@ -4488,20 +4417,10 @@ ssize_t rad_tunnel_pwdecode(uint8_t *passwd, size_t *pwlen, char const *secret, 
 	fr_md5_update(&context, passwd, 2);
 
 	reallen = 0;
-	for (n = 0; n < encrypted_len; n += AUTH_PASS_LEN) {
-		size_t base;
-		size_t block_len = AUTH_PASS_LEN;
-
-		/*
-		 *	Ensure we don't overflow the input on MD5
-		 */
-		if ((n + 2 + AUTH_PASS_LEN) > *pwlen) {
-			block_len = *pwlen - n - 2;
-		}
+	for (n = 0; n < len; n += AUTH_PASS_LEN) {
+		int base = 0;
 
 		if (n == 0) {
-			base = 1;
-
 			fr_md5_final(digest, &context);
 
 			context = old;
@@ -4512,26 +4431,30 @@ ssize_t rad_tunnel_pwdecode(uint8_t *passwd, size_t *pwlen, char const *secret, 
 			 *	'data_len' field.  Ensure it's sane.
 			 */
 			reallen = passwd[2] ^ digest[0];
-			if (reallen > encrypted_len) {
+			if (reallen >= len) {
 				fr_strerror_printf("tunnel password is too long for the attribute");
 				return -1;
 			}
 
-			fr_md5_update(&context, passwd + 2, block_len);
+			fr_md5_update(&context, passwd + 2, AUTH_PASS_LEN);
 
+			base = 1;
 		} else {
-			base = 0;
-
 			fr_md5_final(digest, &context);
 
 			context = old;
-			fr_md5_update(&context, passwd + n + 2, block_len);
+			fr_md5_update(&context, passwd + n + 2, AUTH_PASS_LEN);
 		}
 
-		for (i = base; i < block_len; i++) {
+		for (i = base; i < AUTH_PASS_LEN; i++) {
 			passwd[n + i - 1] = passwd[n + i + 2] ^ digest[i];
 		}
 	}
+
+	/*
+	 *	See make_tunnel_password, above.
+	 */
+	if (reallen > 239) reallen = 239;
 
 	*pwlen = reallen;
 	passwd[reallen] = 0;
@@ -4539,11 +4462,12 @@ ssize_t rad_tunnel_pwdecode(uint8_t *passwd, size_t *pwlen, char const *secret, 
 	return reallen;
 }
 
-/** Encode a CHAP password
+/**
+ * @brief Encode a CHAP password
  *
- * @bug FIXME: might not work with Ascend because
- * we use vp->vp_length, and Ascend gear likes
- * to send an extra '\0' in the string!
+ *	@bug FIXME: might not work with Ascend because
+ *	we use vp->length, and Ascend gear likes
+ *	to send an extra '\0' in the string!
  */
 int rad_chap_encode(RADIUS_PACKET *packet, uint8_t *output, int id,
 		    VALUE_PAIR *password)
@@ -4572,18 +4496,18 @@ int rad_chap_encode(RADIUS_PACKET *packet, uint8_t *output, int id,
 	*ptr++ = id;
 
 	i++;
-	memcpy(ptr, password->vp_strvalue, password->vp_length);
-	ptr += password->vp_length;
-	i += password->vp_length;
+	memcpy(ptr, password->vp_strvalue, password->length);
+	ptr += password->length;
+	i += password->length;
 
 	/*
 	 *	Use Chap-Challenge pair if present,
 	 *	Request Authenticator otherwise.
 	 */
-	challenge = fr_pair_find_by_num(packet->vps, PW_CHAP_CHALLENGE, 0, TAG_ANY);
+	challenge = pairfind(packet->vps, PW_CHAP_CHALLENGE, 0, TAG_ANY);
 	if (challenge) {
-		memcpy(ptr, challenge->vp_strvalue, challenge->vp_length);
-		i += challenge->vp_length;
+		memcpy(ptr, challenge->vp_strvalue, challenge->length);
+		i += challenge->length;
 	} else {
 		memcpy(ptr, packet->vector, AUTH_VECTOR_LEN);
 		i += AUTH_VECTOR_LEN;
@@ -4596,9 +4520,10 @@ int rad_chap_encode(RADIUS_PACKET *packet, uint8_t *output, int id,
 }
 
 
-/** Seed the random number generator
+/**
+ * @brief Seed the random number generator.
  *
- * May be called any number of times.
+ *	May be called any number of times.
  */
 void fr_rand_seed(void const *data, size_t size)
 {
@@ -4649,8 +4574,8 @@ void fr_rand_seed(void const *data, size_t size)
 }
 
 
-/** Return a 32-bit random number
- *
+/**
+ * @brief Return a 32-bit random number.
  */
 uint32_t fr_rand(void)
 {
@@ -4750,8 +4675,8 @@ RADIUS_PACKET *rad_alloc_reply(TALLOC_CTX *ctx, RADIUS_PACKET *packet)
 }
 
 
-/** Free a RADIUS_PACKET
- *
+/**
+ * @brief Free a RADIUS_PACKET
  */
 void rad_free(RADIUS_PACKET **radius_packet_ptr)
 {
@@ -4762,7 +4687,7 @@ void rad_free(RADIUS_PACKET **radius_packet_ptr)
 
 	VERIFY_PACKET(radius_packet);
 
-	fr_pair_list_free(&radius_packet->vps);
+	pairfree(&radius_packet->vps);
 
 	talloc_free(radius_packet);
 	*radius_packet_ptr = NULL;
@@ -4795,7 +4720,7 @@ RADIUS_PACKET *rad_copy_packet(TALLOC_CTX *ctx, RADIUS_PACKET const *in)
 	out->data = NULL;
 	out->data_len = 0;
 
-	out->vps = fr_pair_list_copy(out, in->vps);
+	out->vps = paircopy(out, in->vps);
 	out->offset = 0;
 
 	return out;

@@ -18,12 +18,12 @@
 extern "C" {
 #endif
 
-typedef void *fr_dlhandle;
+typedef void *lt_dlhandle;
 
-fr_dlhandle fr_dlopenext(char const *name);
-void *fr_dlsym(fr_dlhandle handle, char const *symbol);
-int fr_dlclose(fr_dlhandle handle);
-char const *fr_dlerror(void);
+lt_dlhandle lt_dlopenext(char const *name);
+void *lt_dlsym(lt_dlhandle handle, char const *symbol);
+int lt_dlclose(lt_dlhandle handle);
+char const *lt_dlerror(void);
 
 /*
  *	Keep track of which modules we've loaded.
@@ -31,7 +31,7 @@ char const *fr_dlerror(void);
 typedef struct module_entry_t {
 	char			name[MAX_STRING_LEN];
 	module_t const		*module;
-	fr_dlhandle		handle;
+	lt_dlhandle		handle;
 } module_entry_t;
 
 typedef struct fr_module_hup_t fr_module_hup_t;
@@ -49,16 +49,12 @@ typedef struct module_instance_t {
 	pthread_mutex_t		*mutex;
 #endif
 	CONF_SECTION		*cs;
-	time_t			last_hup;
-	bool			instantiated;
 	bool			force;
 	rlm_rcode_t		code;
 	fr_module_hup_t	       	*mh;
 } module_instance_t;
 
-module_instance_t	*module_instantiate(CONF_SECTION *modules, char const *askedname);
-module_instance_t	*module_instantiate_method(CONF_SECTION *modules, char const *askedname, rlm_components_t *method);
-module_instance_t	*module_find(CONF_SECTION *modules, char const *askedname);
+module_instance_t	*find_module_instance(CONF_SECTION *modules, char const *askedname, bool do_link);
 int			find_module_sibling_section(CONF_SECTION **out, CONF_SECTION *module, char const *name);
 int			module_hup_module(CONF_SECTION *cs, module_instance_t *node, time_t when);
 

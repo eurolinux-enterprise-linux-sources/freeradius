@@ -36,7 +36,7 @@ RCSID("$Id$")
 
 void eapsim_calculate_keys(struct eapsim_keys *ek)
 {
-	fr_sha1_ctx context;
+	fr_SHA1_CTX context;
 	uint8_t fk[160];
 	unsigned char buf[256];
 	unsigned char *p;
@@ -105,7 +105,7 @@ void eapsim_dump_mk(struct eapsim_keys *ek)
 	unsigned int i, j, k;
 
 	printf("Input was: \n");
-	printf("   identity: (len=%u)", ek->identitylen);
+	printf("   identity: (len=%d)", ek->identitylen);
 	for (i = 0; i < ek->identitylen; i++) {
 		printf("%02x", ek->identity[i]);
 	}
@@ -116,21 +116,21 @@ void eapsim_dump_mk(struct eapsim_keys *ek)
 	}
 
 	for (k = 0; k<3; k++) {
-		printf("\n   rand%u: ", k);
+		printf("\n   rand%d: ", k);
 		for (i = 0; i < EAPSIM_RAND_SIZE; i++) {
 			printf("%02x", ek->rand[k][i]);
 		}
 	}
 
 	for (k = 0; k<3; k++) {
-		printf("\n   sres%u: ", k);
+		printf("\n   sres%d: ", k);
 		for (i = 0; i < EAPSIM_SRES_SIZE; i++) {
 			printf("%02x", ek->sres[k][i]);
 		}
 	}
 
 	for (k = 0; k<3; k++) {
-		printf("\n   Kc%u: ", k);
+		printf("\n   Kc%d: ", k);
 		for (i = 0; i < EAPSIM_KC_SIZE; i++) {
 			printf("%02x", ek->Kc[k][i]);
 		}

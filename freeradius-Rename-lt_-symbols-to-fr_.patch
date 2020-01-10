@@ -1,0 +1,180 @@
+From 31b815dedccaf3fcc21530614493ad4c0bf48ec1 Mon Sep 17 00:00:00 2001
+From: Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com>
+Date: Mon, 14 Nov 2016 13:08:59 +0200
+Subject: [PATCH] Rename lt_ symbols to fr_
+
+Rename lt_ symbols to fr_ to avoid clashes with libltdl.
+---
+ src/include/modpriv.h         | 12 ++++++------
+ src/main/listen.c             | 10 +++++-----
+ src/main/modules.c            | 10 +++++-----
+ src/modules/rlm_eap/eap.c     |  4 ++--
+ src/modules/rlm_eap/rlm_eap.h |  2 +-
+ src/modules/rlm_sql/rlm_sql.c |  2 +-
+ 6 files changed, 20 insertions(+), 20 deletions(-)
+
+diff --git a/src/include/modpriv.h b/src/include/modpriv.h
+index 94d320e..446e204 100644
+--- a/src/include/modpriv.h
++++ b/src/include/modpriv.h
+@@ -18,12 +18,12 @@
+ extern "C" {
+ #endif
+ 
+-typedef void *lt_dlhandle;
++typedef void *fr_dlhandle;
+ 
+-lt_dlhandle lt_dlopenext(char const *name);
+-void *lt_dlsym(lt_dlhandle handle, char const *symbol);
+-int lt_dlclose(lt_dlhandle handle);
+-char const *lt_dlerror(void);
++fr_dlhandle fr_dlopenext(char const *name);
++void *fr_dlsym(fr_dlhandle handle, char const *symbol);
++int fr_dlclose(fr_dlhandle handle);
++char const *fr_dlerror(void);
+ 
+ /*
+  *	Keep track of which modules we've loaded.
+@@ -31,7 +31,7 @@ char const *lt_dlerror(void);
+ typedef struct module_entry_t {
+ 	char			name[MAX_STRING_LEN];
+ 	module_t const		*module;
+-	lt_dlhandle		handle;
++	fr_dlhandle		handle;
+ } module_entry_t;
+ 
+ typedef struct fr_module_hup_t fr_module_hup_t;
+diff --git a/src/main/listen.c b/src/main/listen.c
+index 55e3f86..6c7e3f1 100644
+--- a/src/main/listen.c
++++ b/src/main/listen.c
+@@ -2758,7 +2758,7 @@ static const FR_NAME_NUMBER listen_compare[] = {
+ 	{ NULL, 0 },
+ };
+ 
+-static int _free_proto_handle(lt_dlhandle *handle)
++static int _free_proto_handle(fr_dlhandle *handle)
+ {
+ 	dlclose(*handle);
+ 	return 0;
+@@ -2771,7 +2771,7 @@ static rad_listen_t *listen_parse(CONF_SECTION *cs, char const *server)
+ 	rad_listen_t	*this;
+ 	CONF_PAIR	*cp;
+ 	char const	*value;
+-	lt_dlhandle	handle;
++	fr_dlhandle	handle;
+ 	CONF_SECTION	*server_cs;
+ 	char		buffer[32];
+ 
+@@ -2790,10 +2790,10 @@ static rad_listen_t *listen_parse(CONF_SECTION *cs, char const *server)
+ 	}
+ 
+ 	snprintf(buffer, sizeof(buffer), "proto_%s", value);
+-	handle = lt_dlopenext(buffer);
++	handle = fr_dlopenext(buffer);
+ 	if (handle) {
+ 		fr_protocol_t	*proto;
+-		lt_dlhandle	*marker;
++		fr_dlhandle	*marker;
+ 
+ 		proto = dlsym(handle, buffer);
+ 		if (!proto) {
+@@ -2812,7 +2812,7 @@ static rad_listen_t *listen_parse(CONF_SECTION *cs, char const *server)
+ 		/*
+ 		 *	Ensure handle gets closed if config section gets freed
+ 		 */
+-		marker = talloc(cs, lt_dlhandle);
++		marker = talloc(cs, fr_dlhandle);
+ 		*marker = handle;
+ 		talloc_set_destructor(marker, _free_proto_handle);
+ 
+diff --git a/src/main/modules.c b/src/main/modules.c
+index 7a593e1..3bd7239 100644
+--- a/src/main/modules.c
++++ b/src/main/modules.c
+@@ -140,7 +140,7 @@ static int check_module_magic(CONF_SECTION *cs, module_t const *module)
+ 	return 0;
+ }
+ 
+-lt_dlhandle lt_dlopenext(char const *name)
++fr_dlhandle fr_dlopenext(char const *name)
+ {
+ 	int flags = RTLD_NOW;
+ 	void *handle;
+@@ -224,19 +224,19 @@ lt_dlhandle lt_dlopenext(char const *name)
+ 	return dlopen(buffer, flags);
+ }
+ 
+-void *lt_dlsym(lt_dlhandle handle, UNUSED char const *symbol)
++void *fr_dlsym(fr_dlhandle handle, UNUSED char const *symbol)
+ {
+ 	return dlsym(handle, symbol);
+ }
+ 
+-int lt_dlclose(lt_dlhandle handle)
++int fr_dlclose(fr_dlhandle handle)
+ {
+ 	if (!handle) return 0;
+ 
+ 	return dlclose(handle);
+ }
+ 
+-char const *lt_dlerror(void)
++char const *fr_dlerror(void)
+ {
+ 	return dlerror();
+ }
+@@ -472,7 +472,7 @@ static module_entry_t *linkto_module(char const *module_name,
+ 	/*
+ 	 *	Keep the handle around so we can dlclose() it.
+ 	 */
+-	handle = lt_dlopenext(module_name);
++	handle = fr_dlopenext(module_name);
+ 	if (!handle) {
+ 		cf_log_err_cs(cs,
+ 			   "Failed to link to module '%s': %s\n",
+diff --git a/src/modules/rlm_eap/eap.c b/src/modules/rlm_eap/eap.c
+index be3e420..25316ea 100644
+--- a/src/modules/rlm_eap/eap.c
++++ b/src/modules/rlm_eap/eap.c
+@@ -130,9 +130,9 @@ int eap_module_load(rlm_eap_t *inst, eap_module_t **m_inst, eap_type_t num, CONF
+ 	/*
+ 	 *	Link the loaded EAP-Type
+ 	 */
+-	method->handle = lt_dlopenext(mod_name);
++	method->handle = fr_dlopenext(mod_name);
+ 	if (!method->handle) {
+-		ERROR("rlm_eap (%s): Failed to link %s: %s", inst->xlat_name, mod_name, lt_dlerror());
++		ERROR("rlm_eap (%s): Failed to link %s: %s", inst->xlat_name, mod_name, fr_dlerror());
+ 
+ 		return -1;
+ 	}
+diff --git a/src/modules/rlm_eap/rlm_eap.h b/src/modules/rlm_eap/rlm_eap.h
+index 409f104..17c452a 100644
+--- a/src/modules/rlm_eap/rlm_eap.h
++++ b/src/modules/rlm_eap/rlm_eap.h
+@@ -36,7 +36,7 @@ RCSIDH(rlm_eap_h, "$Id$")
+ typedef struct eap_module {
+ 	char const		*name;
+ 	rlm_eap_module_t	*type;
+-	lt_dlhandle		handle;
++	fr_dlhandle		handle;
+ 	CONF_SECTION		*cs;
+ 	void			*instance;
+ } eap_module_t;
+diff --git a/src/modules/rlm_sql/rlm_sql.c b/src/modules/rlm_sql/rlm_sql.c
+index aaf2ed4..bee6758 100644
+--- a/src/modules/rlm_sql/rlm_sql.c
++++ b/src/modules/rlm_sql/rlm_sql.c
+@@ -816,7 +816,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
+ 	/*
+ 	 *	Load the appropriate driver for our database
+ 	 */
+-	inst->handle = lt_dlopenext(inst->config->sql_driver_name);
++	inst->handle = fr_dlopenext(inst->config->sql_driver_name);
+ 	if (!inst->handle) {
+ 		ERROR("Could not link driver %s: %s",
+ 		       inst->config->sql_driver_name,
+-- 
+2.10.2
+

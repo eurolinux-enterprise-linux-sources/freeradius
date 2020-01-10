@@ -35,12 +35,12 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #include <openssl/hmac.h>
 
 /*
- * Generate the State attribute, suitable for passing to fr_pair_make().
+ * Generate the State attribute, suitable for passing to pairmake().
  * 'challenge' must be a null terminated string, and be sized at least
  * as large as indicated in the function definition.
  *
  * Returns 0 on success, non-zero otherwise.  For successful returns,
- * 'rad_state' (suitable for passing to fr_pair_make()) and 'raw_state',
+ * 'rad_state' (suitable for passing to pairmake()) and 'raw_state',
  * if non-NULL, will be filled in.
  *
  * In the simplest implementation, we would just use the challenge as state.
@@ -110,7 +110,7 @@ size_t otp_gen_state(char state[OTP_MAX_RADSTATE_LEN],
 		     size_t clen,
 		     int32_t flags, int32_t when, uint8_t const key[16])
 {
-	HMAC_CTX *hmac_ctx;
+	HMAC_CTX hmac_ctx;
 	uint8_t hmac[MD5_DIGEST_LENGTH];
 	char *p;
 
@@ -120,13 +120,12 @@ size_t otp_gen_state(char state[OTP_MAX_RADSTATE_LEN],
 	 *	having to collect the data to be signed into one
 	 *	contiguous piece.
 	 */
-	hmac_ctx = HMAC_CTX_new();
-	HMAC_Init_ex(hmac_ctx, key, sizeof(key[0]) * 16, EVP_md5(), NULL);
-	HMAC_Update(hmac_ctx, (uint8_t const *) challenge, clen);
-	HMAC_Update(hmac_ctx, (uint8_t *) &flags, 4);
-	HMAC_Update(hmac_ctx, (uint8_t *) &when, 4);
-	HMAC_Final(hmac_ctx, hmac, NULL);
-	HMAC_CTX_free(hmac_ctx);
+	HMAC_Init(&hmac_ctx, key, sizeof(key[0]) * 16, EVP_md5());
+	HMAC_Update(&hmac_ctx, (uint8_t const *) challenge, clen);
+	HMAC_Update(&hmac_ctx, (uint8_t *) &flags, 4);
+	HMAC_Update(&hmac_ctx, (uint8_t *) &when, 4);
+	HMAC_Final(&hmac_ctx, hmac, NULL);
+	HMAC_cleanup(&hmac_ctx);
 
 	/*
 	 *	Generate the state.

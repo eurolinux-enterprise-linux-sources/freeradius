@@ -42,7 +42,6 @@ RCSID("$Id$")
 #include "eap.h"
 
 #include "eap_md5.h"
-#include <freeradius-devel/md5.h>
 
 /*
  *	We expect only RESPONSE for which SUCCESS or FAILURE is sent back
@@ -151,9 +150,9 @@ int eapmd5_verify(MD5_PACKET *packet, VALUE_PAIR* password,
 	 */
 	*ptr++ = packet->id;
 	len++;
-	memcpy(ptr, password->vp_strvalue, password->vp_length);
-	ptr += password->vp_length;
-	len += password->vp_length;
+	memcpy(ptr, password->vp_strvalue, password->length);
+	ptr += password->length;
+	len += password->length;
 
 	/*
 	 *	The challenge size is hard-coded.

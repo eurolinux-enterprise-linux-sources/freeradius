@@ -64,11 +64,12 @@ typedef struct rlm_eap_tnc {
 } rlm_eap_tnc_t;
 
 static CONF_PARSER module_config[] = {
-	{ "connection_string", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_eap_tnc_t, connection_string), "NAS Port: %{NAS-Port} NAS IP: %{NAS-IP-Address} NAS_PORT_TYPE: %{NAS-Port-Type}" },
-	CONF_PARSER_TERMINATOR
+	{ "connection_string", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_tnc_t, connection_string), "NAS Port: %{NAS-Port} NAS IP: %{NAS-IP-Address} NAS_PORT_TYPE: %{NAS-Port-Type}" },
+
+	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
 
-static int mod_instantiate(CONF_SECTION *cs, void **instance)
+static int tnc_attach(CONF_SECTION *cs, void **instance)
 {
 	rlm_eap_tnc_t *inst;
 	TNC_Result result;
@@ -130,7 +131,7 @@ static int mod_detach(void *instance)
  * For this package, only 'Identifier' has to be set dynamically. Any
  * other information is static.
  */
-static int mod_session_init(void *instance, eap_handler_t *handler)
+static int tnc_initiate(void *instance, eap_handler_t *handler)
 {
 	rlm_eap_tnc_t *inst = instance;
 	REQUEST *request = NULL;
@@ -188,7 +189,7 @@ static int mod_session_init(void *instance, eap_handler_t *handler)
 	 *
 	 *	Something has gone very wrong if the User-Name doesn't exist.
 	 */
-	username = fr_pair_find_by_num(request->packet->vps, PW_USER_NAME, 0, TAG_ANY);
+	username = pairfind(request->packet->vps, PW_USER_NAME, 0, TAG_ANY);
 
 	RDEBUG("Username for TNC connection: %s", username->vp_strvalue);
 
@@ -200,7 +201,7 @@ static int mod_session_init(void *instance, eap_handler_t *handler)
 	 */
 	MEM(eap_tnc_user = (TNC_BufferReference) strdup(username->vp_strvalue));
 
-	result = storeUsername(conn_id, eap_tnc_user, username->vp_length);
+	result = storeUsername(conn_id, eap_tnc_user, username->length);
 	if (result != TNC_RESULT_SUCCESS) {
 		ERROR("rlm_eap_tnc: NAA-EAP storeUsername returned an "
 		      "error code");
@@ -236,7 +237,7 @@ static int mod_session_init(void *instance, eap_handler_t *handler)
 	 *	stored in 'handler->eap_ds', which will be given back
 	 *	to us...
 	 */
-	handler->stage = PROCESS;
+	handler->stage = AUTHENTICATE;
 
 	return 1;
 }
@@ -251,7 +252,7 @@ static int mod_session_init(void *instance, eap_handler_t *handler)
  * @param handler The eap_handler_t.
  * @return True, if successfully, else false.
  */
-static int mod_process(UNUSED void *instance, eap_handler_t *handler)
+static int mod_authenticate(UNUSED void *instance, eap_handler_t *handler)
 {
 	TNC_ConnectionID conn_id;
 	TNC_Result result;
@@ -304,17 +305,17 @@ static int mod_process(UNUSED void *instance, eap_handler_t *handler)
 
 	case TNC_CONNECTION_STATE_ACCESS_NONE:
 		code = PW_EAP_FAILURE;
-		pair_make_config("TNC-Status", "None", T_OP_SET);
+		pairmake_config("TNC-Status", "None", T_OP_SET);
 		break;
 
 	case TNC_CONNECTION_STATE_ACCESS_ALLOWED:
 		code = PW_EAP_SUCCESS;
-		pair_make_config("TNC-Status", "Access", T_OP_SET);
+		pairmake_config("TNC-Status", "Access", T_OP_SET);
 		break;
 
 	case TNC_CONNECTION_STATE_ACCESS_ISOLATED:
 		code = PW_EAP_SUCCESS;
-		pair_make_config("TNC-Status", "Isolate", T_OP_SET);
+		pairmake_config("TNC-Status", "Isolate", T_OP_SET);
 		break;
 
 	default:
@@ -347,11 +348,11 @@ static int mod_process(UNUSED void *instance, eap_handler_t *handler)
  *	The module name should be the only globally exported symbol.
  *	That is, everything else should be 'static'.
  */
-extern rlm_eap_module_t rlm_eap_tnc;
 rlm_eap_module_t rlm_eap_tnc = {
-	.name		= "eap_tnc",
-	.instantiate	= mod_instantiate,	/* Create new submodule instance */
-	.session_init	= mod_session_init,	/* Initialise a new EAP session */
-	.process	= mod_process,		/* Process next round of EAP method */
-	.detach		= mod_detach		/* detach */
+		"eap_tnc",
+		tnc_attach,		/* attach */
+		tnc_initiate,		/* Start the initial request */
+		NULL,			/* authorization */
+		mod_authenticate,	/* authentication */
+		mod_detach		/* detach */
 };

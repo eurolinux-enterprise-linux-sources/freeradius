@@ -130,7 +130,7 @@ listen {
 		#  write to files in its configuration
 		#  directory.
 		#
-#		random_file = /dev/urandom
+#		random_file = ${certdir}/random
 
 		#
 		#  The default fragment size is 1K.
@@ -198,14 +198,6 @@ listen {
 		# TLS cipher suites.  The format is listed
 		# in "man 1 ciphers".
 		cipher_list = "DEFAULT"
-
-		# If enabled, OpenSSL will use server cipher list
-		# (possibly defined by cipher_list option above)
-		# for choosing right cipher suite rather than
-		# using client-specified list which is OpenSSl default
-		# behavior. Having it set to yes is a current best practice
-		# for TLS
-		cipher_server_preference = no
 
 		#
 		#  Session resumption / fast reauthentication
@@ -437,7 +429,7 @@ home_server tls {
 		#  	openssl dhparam -out certs/dh 1024
 		#
 		dh_file = ${certdir}/dh
-		random_file = /dev/urandom
+		random_file = ${certdir}/random
 
 		#
 		#  The default fragment size is 1K.

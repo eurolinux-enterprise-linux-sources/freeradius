@@ -1,44 +1,43 @@
-From 4dd1bad726e993bcd43f16312acaf95596d35680 Mon Sep 17 00:00:00 2001
+From c76016d3b8051f8e4f55cd547d29d4ac9ec33062 Mon Sep 17 00:00:00 2001
 From: "Alan T. DeKok" <aland@freeradius.org>
 Date: Mon, 8 May 2017 16:38:56 -0400
 Subject: [PATCH] disable internal OpenSSL cache
 
 (cherry picked from commit af030bd4e19c9149e2ffd898ad0c4dfde78c29be)
 ---
- raddb/mods-available/eap        | 18 ++++++++----------
- raddb/sites-available/abfab-tls |  3 ++-
- raddb/sites-available/tls       | 17 ++++++++---------
- src/main/tls.c                  |  4 ++--
- 4 files changed, 20 insertions(+), 22 deletions(-)
+ raddb/mods-available/eap  | 18 ++++++++----------
+ raddb/sites-available/tls | 17 ++++++++---------
+ src/main/tls.c            |  4 ++--
+ 3 files changed, 18 insertions(+), 21 deletions(-)
 
 diff --git a/raddb/mods-available/eap b/raddb/mods-available/eap
-index 9659db1cd..bfbfe710e 100644
+index 95ef66619..e51860ac2 100644
 --- a/raddb/mods-available/eap
 +++ b/raddb/mods-available/eap
-@@ -382,6 +382,13 @@ eap {
- 			#  Enable it.  The default is "no". Deleting the entire "cache"
- 			#  subsection also disables caching.
+@@ -352,6 +352,13 @@ eap {
+ 			#  Deleting the entire "cache" subsection
+ 			#  also disables caching.
  			#
-+			#  As of version 3.0.13-4 (upstream 3.0.14), the
++			#  As of version 3.0.4-8 (upstream 3.0.14), the
 +			#  session cache requires the use of the "name" and
 +			#  "persist_dir" configuration items, below.
 +			#
-+			#  The internal OpenSSL session cache has been permanently
-+			#  disabled.
++			#  The internal OpenSSL session cache has been
++			#  permanently disabled.
 +			#
- 			#  You can disallow resumption for a particular user by adding the
- 			#  following attribute to the control item list:
- 			#
-@@ -390,7 +397,7 @@ eap {
- 			#  If "enable = no" below, you CANNOT enable resumption for just one
- 			#  user by setting the above attribute to "yes".
+ 			#  You can disallow resumption for a
+ 			#  particular user by adding the following
+ 			#  attribute to the control item list:
+@@ -362,7 +369,7 @@ eap {
+ 			#  enable resumption for just one user
+ 			#  by setting the above attribute to "yes".
  			#
 -			enable = yes
 +			enable = no
  
  			#
- 			#  Lifetime of the cached entries, in hours. The sessions will be
-@@ -399,15 +406,6 @@ eap {
+ 			#  Lifetime of the cached entries, in hours.
+@@ -372,15 +379,6 @@ eap {
  			lifetime = 24 # hours
  
  			#
@@ -51,43 +50,29 @@ index 9659db1cd..bfbfe710e 100644
 -			max_entries = 255
 -
 -			#
- 			#  Internal "name" of the session cache. Used to
- 			#  distinguish which TLS context sessions belong to.
- 			#
-diff --git a/raddb/sites-available/abfab-tls b/raddb/sites-available/abfab-tls
-index 79d74e6fc..5dbe143da 100644
---- a/raddb/sites-available/abfab-tls
-+++ b/raddb/sites-available/abfab-tls
-@@ -24,7 +24,8 @@ listen {
- 		cache {
- 			enable = no
- 			lifetime = 24 # hours
--			max_entries = 255
-+			name = "abfab-tls"
-+#			persist_dir = ${logdir}/abfab-tls
- 		}
- 
- 		require_client_cert = yes
+ 			#  Internal "name" of the session cache.
+ 			#  Used to distinguish which TLS context
+ 			#  sessions belong to.
 diff --git a/raddb/sites-available/tls b/raddb/sites-available/tls
-index c9555e1c7..eb39c659e 100644
+index 1ba876745..df687584e 100644
 --- a/raddb/sites-available/tls
 +++ b/raddb/sites-available/tls
-@@ -239,6 +239,14 @@ listen {
+@@ -231,6 +231,14 @@ listen {
  		      #  Deleting the entire "cache" subsection
  		      #  Also disables caching.
  		      #
 +		      #
-+		      #  As of version 3.0.13-4 (upstream 3.0.14), the session
++		      #  As of version 3.0.4-8 (upstream 3.0.14), the session
 +		      #  cache requires the use of the "name" and
 +		      #  "persist_dir" configuration items, below.
 +		      #
-+		      #  The internal OpenSSL session cache has been permanently
-+		      #  disabled.
++		      #  The internal OpenSSL session cache has been
++		      #  permanently disabled.
 +		      #
  		      #  You can disallow resumption for a
  		      #  particular user by adding the following
  		      #  attribute to the control item list:
-@@ -259,15 +267,6 @@ listen {
+@@ -251,15 +259,6 @@ listen {
  		      lifetime = 24 # hours
  
  		      #
@@ -104,10 +89,10 @@ index c9555e1c7..eb39c659e 100644
  		      #  Used to distinguish which TLS context
  		      #  sessions belong to.
 diff --git a/src/main/tls.c b/src/main/tls.c
-index a72be2b63..e992062dc 100644
+index 42b538c4c..b790d2dc1 100644
 --- a/src/main/tls.c
 +++ b/src/main/tls.c
-@@ -2937,9 +2937,9 @@ post_ca:
+@@ -2489,9 +2489,9 @@ post_ca:
  		}
  
  		/*

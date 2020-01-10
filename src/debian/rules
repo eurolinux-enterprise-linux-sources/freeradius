@@ -12,9 +12,6 @@
 
 # Uncomment this to turn on verbose mode.
 export DH_VERBOSE=1
-DPKG_EXPORT_BUILDFLAGS = 1
-include /usr/share/dpkg/default.mk
-
 
 .NOTPARALLEL:
 
@@ -29,7 +26,7 @@ logdir          = /var/log/$(package)
 pkgdocdir       = /usr/share/doc/$(package)
 raddbdir        = /etc/$(package)
 
-modulelist=krb5 ldap sql_mysql sql_iodbc sql_postgresql dhcp redis rest yubikey
+modulelist=krb5 ldap sql_mysql sql_iodbc sql_postgresql
 pkgs=$(shell dh_listpackages)
 
 # This has to be exported to make some magic below work.
@@ -81,7 +78,6 @@ endif
 	./configure $(confflags) \
 		--config-cache \
 		--disable-developer \
-		--disable-openssl-version-check \
 		--prefix=/usr \
 		--exec-prefix=/usr \
 		--mandir=$(mandir) \
@@ -96,7 +92,6 @@ endif
 		--without-rlm_eap_tnc \
 		--with-rlm_sql_postgresql_lib_dir=`pg_config --libdir` \
 		--with-rlm_sql_postgresql_include_dir=`pg_config --includedir` \
-		--with-iodbc-include-dir='/usr/include/iodbc' \
 		--without-rlm_eap_ikev2 \
 		--without-rlm_sql_oracle \
 		--without-rlm_sql_unixodbc
@@ -107,14 +102,14 @@ endif
 	mv config.sub.dist config.sub
 
 #Architecture
-build: build-arch build-indep
+build: patch build-arch build-indep
 
-build-arch: patch build-arch-stamp
+build-arch: build-arch-stamp
 build-arch-stamp: config.status
 	$(MAKE)
 	touch $@
 
-build-indep: patch build-indep-stamp
+build-indep: build-indep-stamp
 build-indep-stamp: config.status
 	touch $@
 
@@ -156,11 +151,6 @@ install-arch: build-arch-stamp
 	mv $(freeradius_dir)/usr/sbin/radiusd $(freeradius_dir)/usr/sbin/$(package)
 	mv $(freeradius_dir)/$(mandir)/man8/radiusd.8 $(freeradius_dir)/$(mandir)/man8/$(package).8
 
-	# don't package symlinks in sites-enabled and mods-enabled - they're
-	# created on install by freeradius-config.postinst
-	rm $(freeradius_dir)/etc/freeradius/sites-enabled/*
-	rm $(freeradius_dir)/etc/freeradius/mods-enabled/*
-
 	dh_install -i --sourcedir=$(freeradius_dir)
 	dh_install --sourcedir=$(freeradius_dir) -p libfreeradius3
 	dh_install --sourcedir=$(freeradius_dir) -p libfreeradius-dev
@@ -171,9 +161,6 @@ install-arch: build-arch-stamp
 	  dh_install --sourcedir=$(freeradius_dir) -p freeradius-$$pkg ; \
 	  rm -f $(freeradius_dir)/usr/lib/freeradius/rlm_$$mod*.so ; \
 	done
-
-	dh_install --sourcedir=$(freeradius_dir) -p freeradius-memcached
-	rm -f $(freeradius_dir)/usr/lib/freeradius/rlm_cache_memcached.so
 
 	dh_install --sourcedir=$(freeradius_dir) -p freeradius-utils
 	dh_install --sourcedir=$(freeradius_dir) -p freeradius

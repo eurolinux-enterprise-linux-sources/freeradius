@@ -1,7 +1,7 @@
 Summary: High-performance and highly configurable free RADIUS server
 Name: freeradius
-Version: 3.0.13
-Release: 9%{?dist}
+Version: 3.0.4
+Release: 8%{?dist}
 License: GPLv2+ and LGPLv2+
 Group: System Environment/Daemons
 URL: http://www.freeradius.org/
@@ -22,21 +22,39 @@ Source103: freeradius-pam-conf
 Source104: freeradius-tmpfiles.conf
 
 Patch1: freeradius-redhat-config.patch
-Patch2: freeradius-Fix-some-issues-found-with-static-analyzers.patch
-Patch3: freeradius-Handle-connection-error-in-rlm_ldap_cacheable_groupo.patch
-Patch4: freeradius-radtest-should-use-Cleartext-Password-for-EAP.patch
-Patch5: freeradius-disable-internal-OpenSSL-cache.patch
-Patch6: freeradius-check-sizeof-packet-.-Found-by-PVS-Studio.patch
-Patch7: freeradius-parse-port.-Closes-2000.patch
-Patch8: freeradius-set-S_IWUSER-when-creating-the-file-not-later.patch
-Patch9: freeradius-FR-GV-302-do-checks-based-on-pointers-not-on-decoded.patch
-Patch10: freeradius-FR-GV-301-handle-malformed-WiMAX-attributes.patch
-Patch11: freeradius-make-data2vp_extended-be-more-like-data2vp_wimax.patch
-Patch12: freeradius-FR-GV-206-decode-option-60-string-not-63-octets-and-.patch
-Patch13: freeradius-FR-GV-303-do-memchr-of-end-p-not-q-p.patch
-Patch14: freeradius-FR-GV-304-check-for-option-overflowing-the-packet.patch
-Patch15: freeradius-FR-GV-201-check-input-output-length-in-make_secret.patch
-Patch16: freeradius-Fix-double-free-in-rlm_sql-acct_redundant.patch
+Patch2: freeradius-postgres-sql.patch
+Patch3: freeradius-add-disable-openssl-version-check.patch
+Patch4: freeradius-talloc-dummy-request.patch
+Patch5: freeradius-dont-detach-after-perl_parse.patch
+Patch6: freeradius-access-union-consistently.patch
+Patch7: freeradius-dont-truncate-uint64.patch
+Patch8: freeradius-prefix-endian-macros.patch
+Patch9: freeradius-dont-swap-uint128-printing-on-be.patch
+Patch10: freeradius-fix-dhcp-dictionary-loading.patch
+Patch11: freeradius-mention-eap-md5-in-radtest-synopsis.patch
+Patch12: freeradius-add-P-option-to-radtest-synopsis.patch
+Patch13: freeradius-exec-dont-assume-request-presence-when-logging.patch
+Patch14: freeradius-raddb-remove-extra-apostrophe-from-trigger.conf.patch
+Patch15: freeradius-raddb-use-appropriate-module-names-in-traps.patch
+Patch16: freeradius-connection-fall-through-to-global-module-triggers.patch
+Patch17: freeradius-ignore-SIGTERM-when-firing-stop-and-signal.term.patch
+Patch18: freeradius-raddb-update-triggers-in-trigger.conf.patch
+Patch19: freeradius-make-grp-tallo-c-too.patch
+Patch20: freeradius-fix-checks-for-PW_TYPE_FILE_INPUT.patch
+Patch21: freeradius-added-D-option-to-mirror-radclient.patch
+Patch22: freeradius-man-remove-client-attribute-description.patch
+Patch23: freeradius-man-remove-references-to-naslist-and-clients.patch
+Patch24: freeradius-valuepair-don-t-remove-unkown-backslash.patch
+Patch25: freeradius-rad_counter-use-heredoc-for-help-message.patch
+Patch26: freeradius-rad_counter-Refine-help-message.patch
+Patch27: freeradius-dhcpclient-Add-a-short-description-to-help-output.patch
+Patch28: freeradius-raddb-Move-trigger.conf-INCLUDE-before-modules.patch
+Patch29: freeradius-Resolve-to-all-families-on-ip_hton-fallback.patch
+Patch30: freeradius-Don-t-overwrite-ip_hton-af-prefix-in-fr_pton4-6.patch
+Patch31: freeradius-raddb-Comment-on-ipaddr-ipv4addr-ipv6addr-use.patch
+Patch32: freeradius-Rename-lt_-symbols-to-fr_.patch
+Patch33: freeradius-disable-internal-OpenSSL-cache.patch
+Patch34: freeradius-set-S_IWUSER-when-creating-the-file.patch
 
 %global docdir %{?_pkgdocdir}%{!?_pkgdocdir:%{_docdir}/%{name}-%{version}}
 
@@ -209,6 +227,24 @@ This plugin provides the unixODBC support for the FreeRADIUS server project.
 %patch14 -p1
 %patch15 -p1
 %patch16 -p1
+%patch17 -p1
+%patch18 -p1
+%patch19 -p1
+%patch20 -p1
+%patch21 -p1
+%patch22 -p1
+%patch23 -p1
+%patch24 -p1
+%patch25 -p1
+%patch26 -p1
+%patch27 -p1
+%patch28 -p1
+%patch29 -p1
+%patch30 -p1
+%patch31 -p1
+%patch32 -p1
+%patch33 -p1
+%patch34 -p1
 
 %build
 # Force compile/link options, extra security for network facing daemon
@@ -233,10 +269,7 @@ This plugin provides the unixODBC support for the FreeRADIUS server project.
         --without-rlm_sql_db2 \
         --without-rlm_sql_oracle \
         --without-rlm_rest \
-        --without-rlm_unbound \
-        --without-rlm_redis \
-        --without-rlm_rediswho \
-        --without-rlm_cache_memcached
+        --without-rlm_unbound
 
 make
 
@@ -248,19 +281,15 @@ make install R=$RPM_BUILD_ROOT
 mkdir -p $RPM_BUILD_ROOT/var/log/radius/radacct
 touch $RPM_BUILD_ROOT/var/log/radius/{radutmp,radius.log}
 
-install -D -m 644 %{SOURCE100} $RPM_BUILD_ROOT/%{_unitdir}/radiusd.service
+install -D -m 755 %{SOURCE100} $RPM_BUILD_ROOT/%{_unitdir}/radiusd.service
 install -D -m 644 %{SOURCE102} $RPM_BUILD_ROOT/%{_sysconfdir}/logrotate.d/radiusd
 install -D -m 644 %{SOURCE103} $RPM_BUILD_ROOT/%{_sysconfdir}/pam.d/radiusd
 
-install -d -m 0755 %{buildroot}%{_prefix}/lib/tmpfiles.d
+mkdir -p %{buildroot}%{_sysconfdir}/tmpfiles.d
 mkdir -p %{buildroot}%{_localstatedir}/run/
 install -d -m 0710 %{buildroot}%{_localstatedir}/run/radiusd/
 install -d -m 0700 %{buildroot}%{_localstatedir}/run/radiusd/tmp
-install -m 0644 %{SOURCE104} %{buildroot}%{_prefix}/lib/tmpfiles.d/radiusd.conf
-
-# install SNMP MIB files
-mkdir -p $RPM_BUILD_ROOT%{_datadir}/snmp/mibs/
-install -m 644 mibs/*RADIUS*.mib $RPM_BUILD_ROOT%{_datadir}/snmp/mibs/
+install -m 0644 %{SOURCE104} %{buildroot}%{_sysconfdir}/tmpfiles.d/radiusd.conf
 
 # remove unneeded stuff
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/certs/*.crt
@@ -273,6 +302,10 @@ rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/certs/index.*
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/certs/serial*
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/certs/dh
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/certs/random
+
+# install SNMP MIB files
+mkdir -p $RPM_BUILD_ROOT%{_datadir}/snmp/mibs/
+install -m 644 mibs/*RADIUS*.txt $RPM_BUILD_ROOT%{_datadir}/snmp/mibs/
 
 rm -f $RPM_BUILD_ROOT/usr/sbin/rc.radiusd
 rm -f $RPM_BUILD_ROOT/usr/bin/rbmonkey
@@ -288,12 +321,6 @@ rm -rf $RPM_BUILD_ROOT/etc/raddb/mods-config/sql/main/oracle
 rm $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-available/unbound
 rm $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-config/unbound/default.conf
 rm $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-available/couchbase
-rm $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/mods-available/abfab*
-rm $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/policy.d/abfab*
-rm $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/policy.d/moonshot-targeted-ids
-rm $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/sites-available/abfab*
-
-rm $RPM_BUILD_ROOT/%{_libdir}/freeradius/rlm_test.so
 
 # remove unsupported config files
 rm -f $RPM_BUILD_ROOT/%{_sysconfdir}/raddb/experimental.conf
@@ -364,7 +391,7 @@ exit 0
 %config(noreplace) %{_sysconfdir}/pam.d/radiusd
 %config(noreplace) %{_sysconfdir}/logrotate.d/radiusd
 %{_unitdir}/radiusd.service
-%{_prefix}/lib/tmpfiles.d/radiusd.conf
+%config %{_sysconfdir}/tmpfiles.d/radiusd.conf
 %dir %attr(710,radiusd,radiusd) %{_localstatedir}/run/radiusd
 %dir %attr(700,radiusd,radiusd) %{_localstatedir}/run/radiusd/tmp
 %dir %attr(755,radiusd,radiusd) %{_localstatedir}/lib/radiusd
@@ -396,7 +423,6 @@ exit 0
 # certs
 %dir %attr(770,root,radiusd) /etc/raddb/certs
 %config(noreplace) /etc/raddb/certs/Makefile
-%config(noreplace) /etc/raddb/certs/passwords.mk
 /etc/raddb/certs/README
 %config(noreplace) /etc/raddb/certs/xpextensions
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/certs/*.cnf
@@ -443,7 +469,6 @@ exit 0
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/buffered-sql
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/tls
 %attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/channel_bindings
-%attr(640,root,radiusd) %config(noreplace) /etc/raddb/sites-available/challenge
 
 # sites-enabled
 # symlink: /etc/raddb/sites-enabled/xxx -> ../sites-available/xxx
@@ -519,7 +544,6 @@ exit 0
 %config(missingok) /etc/raddb/mods-enabled/attr_filter
 %config(missingok) /etc/raddb/mods-enabled/cache_eap
 %config(missingok) /etc/raddb/mods-enabled/chap
-%config(missingok) /etc/raddb/mods-enabled/date
 %config(missingok) /etc/raddb/mods-enabled/detail
 %config(missingok) /etc/raddb/mods-enabled/detail.log
 %config(missingok) /etc/raddb/mods-enabled/dhcp
@@ -587,7 +611,6 @@ exit 0
 %{_libdir}/freeradius/rlm_always.so
 %{_libdir}/freeradius/rlm_attr_filter.so
 %{_libdir}/freeradius/rlm_cache.so
-%{_libdir}/freeradius/rlm_cache_rbtree.so
 %{_libdir}/freeradius/rlm_chap.so
 %{_libdir}/freeradius/rlm_counter.so
 %{_libdir}/freeradius/rlm_cram.so
@@ -597,7 +620,6 @@ exit 0
 %{_libdir}/freeradius/rlm_digest.so
 %{_libdir}/freeradius/rlm_dynamic_clients.so
 %{_libdir}/freeradius/rlm_eap.so
-%{_libdir}/freeradius/rlm_eap_fast.so
 %{_libdir}/freeradius/rlm_eap_gtc.so
 %{_libdir}/freeradius/rlm_eap_leap.so
 %{_libdir}/freeradius/rlm_eap_md5.so
@@ -666,7 +688,7 @@ exit 0
 %doc %{_mandir}/man8/radrelay.8.gz
 
 # MIB files
-%{_datadir}/snmp/mibs/*RADIUS*.mib
+%{_datadir}/snmp/mibs/*RADIUS*.txt
 
 %files doc
 
@@ -683,9 +705,7 @@ exit 0
 %doc %{_mandir}/man1/radtest.1.gz
 %doc %{_mandir}/man1/radwho.1.gz
 %doc %{_mandir}/man1/radzap.1.gz
-%doc %{_mandir}/man1/rad_counter.1.gz
 %doc %{_mandir}/man1/smbencrypt.1.gz
-%doc %{_mandir}/man1/dhcpclient.1.gz
 %doc %{_mandir}/man5/checkrad.5.gz
 %doc %{_mandir}/man8/radcrypt.8.gz
 %doc %{_mandir}/man8/radsniff.8.gz
@@ -809,149 +829,14 @@ exit 0
 %{_libdir}/freeradius/rlm_sql_unixodbc.so
 
 %changelog
-* Thu Feb 22 2018 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.13-9
-- Fix double free in rlm_sql acct_redundant
-  Resolves: Bug#1551069 Radius service crashes with "Bad talloc magic value -
-                        unknown value" when using module sql rlm_sql
-
-* Mon Jul 17 2017 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.13-8
-- Avoid misinterpreting zero-size malloc in data2vp_extended() fix.
-- Related: Bug#1469415 CVE-2017-10984 freeradius: Out-of-bounds write in
-                       data2vp_wimax()
-
-* Tue Jul 11 2017 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.13-7
-- Resolves: Bug#1469408 CVE-2017-10978 freeradius: Out-of-bounds read/write due
-                        to improper output buffer size check in make_secret()
-- Resolves: Bug#1469412 CVE-2017-10983 freeradius: Out-of-bounds read in
-                        fr_dhcp_decode() when decoding option 63
-- Resolves: Bug#1469415 CVE-2017-10984 freeradius: Out-of-bounds write in
-                        data2vp_wimax()
-- Resolves: Bug#1469416 CVE-2017-10985 freeradius: Infinite loop and memory
-                        exhaustion with 'concat' attributes
-- Resolves: Bug#1469419 CVE-2017-10986 freeradius: Infinite read in
-                        dhcp_attr2vp()
-- Resolves: Bug#1469422 CVE-2017-10987 freeradius: Buffer over-read in
-                        fr_dhcp_decode_suboptions()
-
-* Thu Jun 15 2017 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.13-6
-- Avoid race condition when creating session cache file
-  Resolves: Bug#1458746 CVE-2017-9148 freeradius: TLS resumption
+* Thu Jun 15 2017 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.4-8
+- Disable internal OpenSSL cache and fix session cache file permissions.
+  Resolves: Bug#1459131 CVE-2017-9148 freeradius: TLS resumption
                         authentication bypass
 
-* Tue Jun 06 2017 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.13-5
-- Refer to correct package version in configuration comments for Bug#1458746
-  (CVE-2017-9148) fix.
-  Related: Bug#1458746  CVE-2017-9148 freeradius: TLS resumption
-                        authentication bypass
-
-* Tue Jun 06 2017 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.13-4
-- Disable internal OpenSSL cache.
-  Resolves: Bug#1458746 CVE-2017-9148 freeradius: TLS resumption
-                        authentication bypass
-- Check sizeof(*packet), not sizeof(packet) in EAP-PWD
-  Resolves: Bug#1459073 Potential buffer overflow in FreeRADIUS EAP-PWD
-- Parse port as well as address for dhcpclient destination
-  Resolves: Bug#1457825 dhcpclient does no accept IP:PORT
-
-* Wed Mar 29 2017 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.13-3
-- Explicitly disable rlm_cache_memcached to avoid error when the module's
-  dependencies are installed, and it is built, but not packaged.
-  Related:  Bug#1202751 Rebase FreeRADIUS to 3.0.12 or later minor release
-- Prevent segfaults by adding a missing handling of connection errors in
-  rlm_ldap.
-  Resolves: Bug#1437409 [abrt] freeradius: radiusd killed by SIGSEGV
-- Make radtest use Cleartext-Password for EAP, fixing its support for eap-md5.
-  Resolves: Bug#1436619 radtest does not work with eap-md5
-
-* Thu Mar 23 2017 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.13-2
-- Fix some issues found with static analyzers.
-  Resolves: Bug#1432103 FreeRADIUS fails covscan checks
-- Revert rlm_eap_tnc removal, because the tncfhh package is still in RHEL.
-  Related:  Bug#1202751 Rebase FreeRADIUS to 3.0.12 or later minor release
-
-* Tue Mar 07 2017 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.13-1
-- Upgrade to upstream v3.0.13 release.
-  See upstream ChangeLog for details (in freeradius-doc subpackage).
-  Related:  Bug#1202751 Rebase FreeRADIUS to 3.0.12 or later minor release
-  Resolves: Bug#1329181 freeradius-python fix libpython2.7.so dependency at
-                        compile time
-  Resolves: Bug#1425869 Radiusd does not trigger modules.sql.fail trap if it
-                        can't connect to mysql server
-  Resolves: Bug#1427829 Stack overflow when passing bare IPv6 to radclient
-
-* Tue Feb 21 2017 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.12-2
-- Do not fail logrotate if radiusd is not running.
-  Resolves: Bug#1365226 error running non-shared postrotate script for
-                        /var/log/radius/radius.log of
-                        '/var/log/radius/radius.log '
-- Fix output to log file specified with -l option.
-  Resolves: Bug#1421207 radiusd does not work with log file specified by -l
-                        option
-- Fix long hostnames interpreted as IP addresses.
-  Resolves: Bug#1420359 radclient does not detect 4. level and higher domain
-                        name as a domain name
-- Avoid clashes with libtool library symbols.
-  Resolves: Bug#1391960 undefined symbol: get_vtable in
-                        /usr/lib64/libtdsodbc.so.0 with freeradius-unixODBC
-- Remove mentions of Auth-Type = System from docs.
-  Resolves: Bug#1420293 Freeradius does not know Auth-Type = System
-- Improve ip/v4/v6/addr documentation.
-  Resolves: Bug#1179736 add description for ipaddr = hostname from DNS with A
-                        and AAAA entries
-
-* Fri Nov 25 2016 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.12-1
-- Upgrade to upstream v3.0.12 release.
-  See upstream ChangeLog for details (in freeradius-doc subpackage).
-  Related:  Bug#1202751 Rebase FreeRADIUS to 3.0.7 or later minor release
-  Resolves: Bug#1358989 FreeRADIUS stops reading the accounting packets from the
-                        detail file
-  Resolves: Bug#1269217 FreeRADIUS triggers mprotect with large radius reply
-  Resolves: Bug#1344183 radiusd crashed in rbtree_find() after receiving a packet
-  Resolves: Bug#1370431 FreeRADIUS fails to establish LDAP connections under
-                        load
-  Resolves: Bug#1397981 [abrt] freeradius: radiusd killed by SIGSEGV
-
-* Mon Apr 18 2016 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.11-1
-- Upgrade to upstream v3.0.11 release.
-  See upstream ChangeLog for details (in freeradius-doc subpackage).
-  Resolves: Bug#1197551
-  Resolves: Bug#1179745
-  Resolves: Bug#1202751 Rebase FreeRADIUS to 3.0.7 or later minor release
-  Resolves: Bug#1289849 FreeRadius should start after ldap, ipa and krb5kdc
-  Resolves: Bug#1208886 Add the latest Mikrotik dictionary into Freeradius
-  Resolves: Bug#1198620 radutmp should not rotate
-  Resolves: Bug#1180979 Freeradius is installing files under /etc/tmpfiles.d/
-  Resolves: Bug#1187904 radiusd logrotate config file contains old style
-                        "/sbin/service radius reload" reload call
-  Resolves: Bug#1167846 radiusd fails to load clients from ldap
-  Resolves: Bug#1422018 /usr/lib/systemd/system/radiusd.service is marked
-                        executable. Please remove executable permission bits
-  Resolves: Bug#1167843 support for older style generic attributes in
-                        rlm_ldap doesn't work
-  Resolves: Bug#1354234 home servers are marked as dead by radiusd
-
-* Wed Dec 09 2015 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.10-1
-- Upgrade to upstream v3.0.10 release.
-  See upstream ChangeLog for details (in freeradius-doc subpackage).
-  Related: Bug#1202751
-  Resolves: Bug#1340334 freeradius: Decryption of very long Tunnel-Passwords
-                        can cause buffer overflow
-- Remove rlm_eap_tnc support as the required package "tncfhh" was retired.
-
-* Wed Aug 19 2015 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.9-1
-- Upgrade to upstream v3.0.9 release.
-  See upstream ChangeLog for details (in freeradius-doc subpackage).
-  Related: Bug#1202751
-
-* Tue Apr 28 2015 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.8-1
-- Upgrade to upstream v3.0.8 release.
-  See upstream ChangeLog for details (in freeradius-doc subpackage).
-  Related: Bug#1202751
-
-* Thu Mar 19 2015 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.7-1
-- Upgrade to upstream v3.0.7 release.
-  See upstream ChangeLog for details (in freeradius-doc subpackage).
-  Related: Bug#1202751
+* Mon Nov 14 2016 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.4-7
+- Rename lt_ symbols to fr_ to avoid clashes with libltdl.
+  Resolves: Bug#1394787
 
 * Fri Dec 26 2014 Nikolai Kondrashov <Nikolai.Kondrashov@redhat.com> - 3.0.4-6
 - Don't remove backslash from unknown escape sequences in LDAP values.

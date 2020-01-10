@@ -53,105 +53,6 @@ const FR_NAME_NUMBER fr_tokens[] = {
 	{ NULL, 0,		},
 };
 
-const bool fr_assignment_op[] = {
-	false,		/* invalid token */
-	false,		/* end of line */
-	false,		/* { */
-	false,		/* } */
-	false,		/* ( */
-	false,		/* ) 		 5 */
-	false,		/* , */
-	false,		/* ; */
-
-	true,		/* ++ */
-	true,		/* += */
-	true,		/* -=  		10 */
-	true,		/* := */
-	true,		/* = */
-	false,		/* != */
-	false,		/* >= */
-	false,		/* > 		15 */
-	false,		/* <= */
-	false,		/* < */
-	false,		/* =~ */
-	false,		/* !~ */
-	false,		/* =* 		20 */
-	false,		/* !* */
-	false,		/* == */
-	false,				/* # */
-	false,		/* bare word */
-	false,		/* "foo" 	25 */
-	false,		/* 'foo' */
-	false,		/* `foo` */
-	false
-};
-
-const bool fr_equality_op[] = {
-	false,		/* invalid token */
-	false,		/* end of line */
-	false,		/* { */
-	false,		/* } */
-	false,		/* ( */
-	false,		/* ) 		 5 */
-	false,		/* , */
-	false,		/* ; */
-
-	false,		/* ++ */
-	false,		/* += */
-	false,		/* -=  		10 */
-	false,		/* := */
-	false,		/* = */
-	true,		/* != */
-	true,		/* >= */
-	true,		/* > 		15 */
-	true,		/* <= */
-	true,		/* < */
-	true,		/* =~ */
-	true,		/* !~ */
-	true,		/* =* 		20 */
-	true,		/* !* */
-	true,		/* == */
-	false,				/* # */
-	false,		/* bare word */
-	false,		/* "foo" 	25 */
-	false,		/* 'foo' */
-	false,		/* `foo` */
-	false
-};
-
-const bool fr_str_tok[] = {
-	false,		/* invalid token */
-	false,		/* end of line */
-	false,		/* { */
-	false,		/* } */
-	false,		/* ( */
-	false,		/* ) 		 5 */
-	false,		/* , */
-	false,		/* ; */
-
-	false,		/* ++ */
-	false,		/* += */
-	false,		/* -=  		10 */
-	false,		/* := */
-	false,		/* = */
-	false,		/* != */
-	false,		/* >= */
-	false,		/* > 		15 */
-	false,		/* <= */
-	false,		/* < */
-	false,		/* =~ */
-	false,		/* !~ */
-	false,		/* =* 		20 */
-	false,		/* !* */
-	false,		/* == */
-	false,				/* # */
-	true,		/* bare word */
-	true,		/* "foo" 	25 */
-	true,		/* 'foo' */
-	true,		/* `foo` */
-	false
-};
-
 /*
  *	This works only as long as special tokens
  *	are max. 2 characters, but it's fast.
@@ -167,7 +68,7 @@ const bool fr_str_tok[] = {
  *	At end-of-line, buf[0] is set to '\0'.
  *	Returns 0 or special token value.
  */
-static FR_TOKEN getthing(char const **ptr, char *buf, int buflen, bool tok,
+static FR_TOKEN getthing(char const **ptr, char *buf, int buflen, int tok,
 			 FR_NAME_NUMBER const *tokenlist, bool unescape)
 {
 	char			*s;
@@ -182,10 +83,10 @@ static FR_TOKEN getthing(char const **ptr, char *buf, int buflen, bool tok,
 
 	/* Skip whitespace */
 	p = *ptr;
+	while (*p && isspace((int) *p))
+		p++;
 
-	while (*p && isspace((int) *p)) p++;
-
-	if (!*p) {
+	if (*p == 0) {
 		*ptr = p;
 		return T_EOL;
 	}
@@ -197,15 +98,86 @@ static FR_TOKEN getthing(char const **ptr, char *buf, int buflen, bool tok,
 		if (TOKEN_MATCH(p, t->name)) {
 			strcpy(buf, t->name);
 			p += strlen(t->name);
-
-			rcode = t->number;
-			goto done;
+			while (isspace((int) *p))
+				p++;
+			*ptr = p;
+			return (FR_TOKEN) t->number;
 		}
 	}
 
 	/* Read word. */
 	quote = '\0';
-	switch (*p) {
+	if ((*p == '"') ||
+	    (*p == '\'') ||
+	    (*p == '`')) {
+		quote = *p;
+		end = false;
+		p++;
+	}
+	s = buf;
+
+	while (*p && buflen-- > 1) {
+		if (unescape && quote && (*p == '\\')) {
+			p++;
+
+			switch(*p) {
+				case 'r':
+					*s++ = '\r';
+					break;
+				case 'n':
+					*s++ = '\n';
+					break;
+				case 't':
+					*s++ = '\t';
+					break;
+				case '\0':
+					*s++ = '\\';
+					p--; /* force EOS */
+					break;
+				default:
+					if (*p >= '0' && *p <= '9' &&
+					    sscanf(p, "%3o", &x) == 1) {
+						*s++ = x;
+						p += 2;
+					} else
+						*s++ = *p;
+					break;
+			}
+			p++;
+			continue;
+		}
+		if (quote && (*p == quote)) {
+			end = true;
+			p++;
+			break;
+		}
+		if (!quote) {
+			if (isspace((int) *p))
+				break;
+			if (tok) {
+				for (t = tokenlist; t->name; t++)
+					if (TOKEN_MATCH(p, t->name))
+						break;
+				if (t->name != NULL)
+					break;
+			}
+		}
+		*s++ = *p++;
+	}
+	*s++ = 0;
+
+	if (quote && !end) {
+		fr_strerror_printf("Unterminated string");
+		return T_OP_INVALID;
+	}
+
+	/* Skip whitespace again. */
+	while (*p && isspace((int) *p))
+		p++;
+	*ptr = p;
+
+	/* we got SOME form of output string, even if it is empty */
+	switch (quote) {
 	default:
 		rcode = T_BARE_WORD;
 		break;
@@ -223,123 +195,6 @@ static FR_TOKEN getthing(char const **ptr, char *buf, int buflen, bool tok,
 		break;
 	}
 
-	if (rcode != T_BARE_WORD) {
-		quote = *p;
-		end = false;
-		p++;
-	}
-	s = buf;
-
-	while (*p && buflen-- > 1) {
-		/*
-		 *	We're looking for strings.  Stop on spaces, or
-		 *	(if given a token list), on a token, or on a
-		 *	comma.
-		 */
-		if (!quote) {
-			if (isspace((int) *p)) {
-				break;
-			}
-
-			if (tok) {
-				for (t = tokenlist; t->name; t++) {
-					if (TOKEN_MATCH(p, t->name)) {
-						*s++ = 0;
-						goto done;
-					}
-				}
-			}
-			if (*p == ',') break;
-
-			/*
-			 *	Copy the character over.
-			 */
-			*s++ = *p++;
-			continue;
-		} /* else there was a quotation character */
-
-		/*
-		 *	Un-escaped quote character.  We're done.
-		 */
-		if (*p == quote) {
-			end = true;
-			p++;
-			break;
-		}
-
-		/*
-		 *	Everything but backslash gets copied over.
-		 */
-		if (*p != '\\') {
-			*s++ = *p++;
-			continue;
-		}
-
-		/*
-		 *	There's nothing after the backslash, it's an error.
-		 */
-		if (!p[1]) {
-			fr_strerror_printf("Unterminated string");
-			return T_INVALID;
-		}
-
-		if (unescape) {
-			p++;
-
-			switch (*p) {
-				case 'r':
-					*s++ = '\r';
-					break;
-				case 'n':
-					*s++ = '\n';
-					break;
-				case 't':
-					*s++ = '\t';
-					break;
-
-				default:
-					if (*p >= '0' && *p <= '9' &&
-					    sscanf(p, "%3o", &x) == 1) {
-						*s++ = x;
-						p += 2;
-					} else
-						*s++ = *p;
-					break;
-			}
-			p++;
-
-		} else {
-			/*
-			 *	Convert backslash-quote to quote, but
-			 *	leave everything else alone.
-			 */
-			if (p[1] == quote) { /* convert '\'' --> ' */
-				p++;
-			} else {
-				if (buflen < 2) {
-					fr_strerror_printf("Truncated input");
-					return T_INVALID;
-				}
-
-				*(s++) = *(p++);
-			}
-			*(s++) = *(p++);
-		}
-	}
-
-	*s++ = 0;
-
-	if (quote && !end) {
-		fr_strerror_printf("Unterminated string");
-		return T_INVALID;
-	}
-
-done:
-	/* Skip whitespace again. */
-	while (*p && isspace((int) *p)) p++;
-
-	*ptr = p;
-
 	return rcode;
 }
 
@@ -349,7 +204,7 @@ done:
  */
 int getword(char const **ptr, char *buf, int buflen, bool unescape)
 {
-	return getthing(ptr, buf, buflen, false, fr_tokens, unescape) == T_EOL ? 0 : 1;
+	return getthing(ptr, buf, buflen, 0, fr_tokens, unescape) == T_EOL ? 0 : 1;
 }
 
 
@@ -358,23 +213,7 @@ int getword(char const **ptr, char *buf, int buflen, bool unescape)
  */
 FR_TOKEN gettoken(char const **ptr, char *buf, int buflen, bool unescape)
 {
-	return getthing(ptr, buf, buflen, true, fr_tokens, unescape);
-}
-
-/*
- *	Expect an operator.
- */
-FR_TOKEN getop(char const **ptr)
-{
-	char op[3];
-	FR_TOKEN rcode;
-
-	rcode = getthing(ptr, op, sizeof(op), true, fr_tokens, false);
-	if (!fr_assignment_op[rcode] && !fr_equality_op[rcode]) {
-		fr_strerror_printf("Expected operator");
-		return T_INVALID;
-	}
-	return rcode;
+	return getthing(ptr, buf, buflen, 1, fr_tokens, unescape);
 }
 
 /*
@@ -384,7 +223,7 @@ FR_TOKEN getstring(char const **ptr, char *buf, int buflen, bool unescape)
 {
 	char const *p;
 
-	if (!ptr || !*ptr || !buf) return T_INVALID;
+	if (!ptr || !*ptr || !buf) return T_OP_INVALID;
 
 	p = *ptr;
 
@@ -396,7 +235,7 @@ FR_TOKEN getstring(char const **ptr, char *buf, int buflen, bool unescape)
 		return gettoken(ptr, buf, buflen, unescape);
 	}
 
-	return getthing(ptr, buf, buflen, false, fr_tokens, unescape);
+	return getthing(ptr, buf, buflen, 0, fr_tokens, unescape);
 }
 
 /*

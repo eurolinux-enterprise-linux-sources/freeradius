@@ -132,9 +132,9 @@ int securid_sessionlist_add(rlm_securid_t *inst,REQUEST *request, SECURID_SESSIO
 	 *	Generate State, since we've been asked to add it to
 	 *	the list.
 	 */
-	state = pair_make_reply("State", session->state, T_OP_EQ);
+	state = pairmake_reply("State", session->state, T_OP_EQ);
 	if (!state) return -1;
-	state->vp_length = SECURID_STATE_LEN;
+	state->length = SECURID_STATE_LEN;
 
 	status = rbtree_insert(inst->session_tree, session);
 	if (status) {
@@ -164,7 +164,7 @@ int securid_sessionlist_add(rlm_securid_t *inst,REQUEST *request, SECURID_SESSIO
 	pthread_mutex_unlock(&(inst->session_mutex));
 
 	if (!status) {
-		fr_pair_list_free(&state);
+		pairfree(&state);
 		ERROR("rlm_securid: Failed to store session");
 		return -1;
 	}
@@ -192,13 +192,13 @@ SECURID_SESSION *securid_sessionlist_find(rlm_securid_t *inst, REQUEST *request)
 	/*
 	 *	We key the sessions off of the 'state' attribute
 	 */
-	state = fr_pair_find_by_num(request->packet->vps, PW_STATE, 0, TAG_ANY);
+	state = pairfind(request->packet->vps, PW_STATE, 0, TAG_ANY);
 	if (!state) {
 		return NULL;
 	}
 
-	if (state->vp_length != SECURID_STATE_LEN) {
-	  ERROR("rlm_securid: Invalid State variable. length=%d", (int) state->vp_length);
+	if (state->length != SECURID_STATE_LEN) {
+	  ERROR("rlm_securid: Invalid State variable. length=%d", (int) state->length);
 		return NULL;
 	}
 

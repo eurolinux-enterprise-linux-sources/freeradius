@@ -1,8 +1,7 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version.
+ *   it under the terms of the GNU General Public License, version 2 if the
+ *   License as published by the Free Software Foundation.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -30,15 +29,14 @@ RCSID("$Id$")
 
 #include "rlm_eap.h"
 
-#include <sys/stat.h>
-
 static const CONF_PARSER module_config[] = {
 	{ "default_eap_type", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_t, default_method_name), "md5" },
 	{ "timer_expire", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_eap_t, timer_limit), "60" },
 	{ "ignore_unknown_eap_types", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_t, ignore_unknown_types), "no" },
-	{ "cisco_accounting_username_bug", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_t, mod_accounting_username_bug), "no" },
+	{ "mod_accounting_username_bug", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_t, mod_accounting_username_bug), "no" },
 	{ "max_sessions", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_eap_t, max_sessions), "2048" },
-	CONF_PARSER_TERMINATOR
+
+	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
 
 /*
@@ -52,9 +50,18 @@ static int mod_detach(void *instance)
 
 #ifdef HAVE_PTHREAD_H
 	pthread_mutex_destroy(&(inst->session_mutex));
+	if (inst->handler_tree) pthread_mutex_destroy(&(inst->handler_mutex));
 #endif
 
 	rbtree_free(inst->session_tree);
+	if (inst->handler_tree) {
+		rbtree_free(inst->handler_tree);
+		/*
+		 *  Must be NULL else when nodes are freed they try to
+		 *  delete themselves from the tree.
+		 */
+		inst->handler_tree = NULL;
+	}
 	inst->session_tree = NULL;
 	eaplist_free(inst);
 
@@ -93,6 +100,17 @@ static int eap_handler_cmp(void const *a, void const *b)
 
 
 /*
+ *	Compare two handler pointers
+ */
+static int eap_handler_ptr_cmp(void const *a, void const *b)
+{
+	if (a < b) return -1;
+	if (a > b) return +1;
+	return 0;
+}
+
+
+/*
  * read the config section and load all the eap authentication types present.
  */
 static int mod_instantiate(CONF_SECTION *cs, void *instance)
@@ -115,29 +133,18 @@ static int mod_instantiate(CONF_SECTION *cs, void *instance)
 	inst->xlat_name = cf_section_name2(cs);
 	if (!inst->xlat_name) inst->xlat_name = "EAP";
 
-	if (!dict_valbyname(PW_AUTH_TYPE, 0, inst->xlat_name)) {
-		cf_log_err_cs(cs, "Failed to find 'Auth-Type %s' section.  Cannot authenticate users.",
-			      inst->xlat_name);
-		return -1;
-	}
-
 	/* Load all the configured EAP-Types */
 	num_methods = 0;
 	for(scs = cf_subsection_find_next(cs, NULL, NULL);
 	    scs != NULL;
 	    scs = cf_subsection_find_next(cs, scs, NULL)) {
+
 		char const *name;
 
 		name = cf_section_name1(scs);
 		if (!name)  continue;
 
 		if (!strcmp(name, TLS_CONFIG_SECTION))  continue;
-
-		/*
-		 *	Easier sometimes than commenting out blocks,
-		 *	or deleting blocks.
-		 */
-		if (!strcmp(name, "disable")) continue;
 
 		method = eap_name2type(name);
 		if (method == PW_EAP_INVALID) {
@@ -163,24 +170,19 @@ static int mod_instantiate(CONF_SECTION *cs, void *instance)
 		 *	etc. configurations from eap.conf in order to
 		 *	have EAP without the TLS types.
 		 */
-		switch (method) {
-		case PW_EAP_TLS:
-		case PW_EAP_TTLS:
-		case PW_EAP_PEAP:
-		case PW_EAP_PWD:
-			WARN("rlm_eap (%s): Ignoring EAP method %s because we don't have OpenSSL support",
-			     inst->xlat_name, name);
+		if ((method == PW_EAP_TLS) ||
+		    (method == PW_EAP_TTLS) ||
+		    (method == PW_EAP_PEAP)) {
+			DEBUG2("rlm_eap (%s): Ignoring EAP method %s because we do not have OpenSSL support",
+			       inst->xlat_name, name);
 			continue;
-
-		default:
-			break;
 		}
 #endif
 
 		/*
 		 *	Load the type.
 		 */
-		ret = eap_module_instantiate(inst, &inst->methods[method], method, scs);
+		ret = eap_module_load(inst, &inst->methods[method], method, scs);
 
 		(void) talloc_get_type_abort(inst->methods[method], eap_module_t);
 
@@ -231,6 +233,22 @@ static int mod_instantiate(CONF_SECTION *cs, void *instance)
 	}
 	fr_link_talloc_ctx_free(inst, inst->session_tree);
 
+	if (fr_debug_flag) {
+		inst->handler_tree = rbtree_create(NULL, eap_handler_ptr_cmp, NULL, 0);
+		if (!inst->handler_tree) {
+			ERROR("rlm_eap (%s): Cannot initialize tree", inst->xlat_name);
+			return -1;
+		}
+		fr_link_talloc_ctx_free(inst, inst->handler_tree);
+
+#ifdef HAVE_PTHREAD_H
+		if (pthread_mutex_init(&(inst->handler_mutex), NULL) < 0) {
+			ERROR("rlm_eap (%s): Failed initializing mutex: %s", inst->xlat_name, fr_syserror(errno));
+			return -1;
+		}
+#endif
+	}
+
 #ifdef HAVE_PTHREAD_H
 	if (pthread_mutex_init(&(inst->session_mutex), NULL) < 0) {
 		ERROR("rlm_eap (%s): Failed initializing mutex: %s", inst->xlat_name, fr_syserror(errno));
@@ -255,9 +273,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 
 	inst = (rlm_eap_t *) instance;
 
-	if (!fr_pair_find_by_num(request->packet->vps, PW_EAP_MESSAGE, 0, TAG_ANY)) {
-		REDEBUG("You set 'Auth-Type = %s' for a request that does "
-			"not contain an EAP-Message attribute!", inst->xlat_name);
+	if (!pairfind(request->packet->vps, PW_EAP_MESSAGE, 0, TAG_ANY)) {
+		REDEBUG("You set 'Auth-Type = EAP' for a request that does "
+			"not contain an EAP-Message attribute!");
 		return RLM_MODULE_INVALID;
 	}
 
@@ -266,7 +284,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	 */
 	eap_packet = eap_vp2packet(request, request->packet->vps);
 	if (!eap_packet) {
-		RERROR("Malformed EAP Message: %s", fr_strerror());
+		RERROR("Malformed EAP Message");
 		return RLM_MODULE_FAIL;
 	}
 
@@ -301,7 +319,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	/*
 	 *	If we're doing horrible tunneling work, remember it.
 	 */
-	if ((request->options & RAD_REQUEST_OPTION_PROXY_EAP) != 0) {
+	if ((request->log.lvl & RAD_REQUEST_OPTION_PROXY_EAP) != 0) {
 		RDEBUG2("No EAP proxy set.  Not composing EAP");
 		/*
 		 *	Add the handle to the proxied list, so that we
@@ -341,11 +359,11 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 *	Some simple sanity checks.  These should really
 		 *	be handled by the radius library...
 		 */
-		vp = fr_pair_find_by_num(request->proxy->vps, PW_EAP_MESSAGE, 0, TAG_ANY);
+		vp = pairfind(request->proxy->vps, PW_EAP_MESSAGE, 0, TAG_ANY);
 		if (vp) {
-			vp = fr_pair_find_by_num(request->proxy->vps, PW_MESSAGE_AUTHENTICATOR, 0, TAG_ANY);
+			vp = pairfind(request->proxy->vps, PW_MESSAGE_AUTHENTICATOR, 0, TAG_ANY);
 			if (!vp) {
-				fr_pair_make(request->proxy,
+				pairmake(request->proxy,
 					 &request->proxy->vps,
 					 "Message-Authenticator",
 					 NULL, T_OP_EQ);
@@ -357,9 +375,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 *	set to 127.0.0.1 for tunneled requests, and
 		 *	we don't want to tell the world that...
 		 */
-		fr_pair_delete_by_num(&request->proxy->vps, PW_FREERADIUS_PROXIED_TO, VENDORPEC_FREERADIUS, TAG_ANY);
+		pairdelete(&request->proxy->vps, PW_FREERADIUS_PROXIED_TO, VENDORPEC_FREERADIUS, TAG_ANY);
 
-		RWDEBUG2("Tunneled session will be proxied.  Not doing EAP");
+		RDEBUG2("Tunneled session will be proxied.  Not doing EAP");
 		return RLM_MODULE_HANDLED;
 	}
 #endif
@@ -408,26 +426,6 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		}
 
 	} else {
-		/*
-		 *	Enable the cached entry on success.
-		 */
-		if (handler->eap_ds->request->code == PW_EAP_SUCCESS) {
-			VALUE_PAIR *vp;
-
-			vp = fr_pair_find_by_num(request->state, PW_TLS_CACHE_FILENAME, 0, TAG_ANY);
-			if (vp) (void) chmod(vp->vp_strvalue, S_IRUSR | S_IWUSR);
-		}
-
-		/*
-		 *	Disable the cached entry on failure.
-		 */
-		if (handler->eap_ds->request->code == PW_EAP_FAILURE) {
-			VALUE_PAIR *vp;
-
-			vp = fr_pair_find_by_num(request->state, PW_TLS_CACHE_FILENAME, 0, TAG_ANY);
-			if (vp) (void) unlink(vp->vp_strvalue);
-		}
-
 		RDEBUG2("Freeing handler");
 		/* handler is not required any more, free it now */
 		talloc_free(handler);
@@ -445,10 +443,10 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		/*
 		 *	Doesn't exist, add it in.
 		 */
-		vp = fr_pair_find_by_num(request->reply->vps, PW_USER_NAME, 0, TAG_ANY);
+		vp = pairfind(request->reply->vps, PW_USER_NAME, 0, TAG_ANY);
 		if (!vp) {
-			vp = fr_pair_copy(request->reply, request->username);
-			fr_pair_add(&request->reply->vps, vp);
+			vp = paircopyvp(request->reply, request->username);
+			pairadd(&request->reply->vps, vp);
 		}
 
 		/*
@@ -457,11 +455,11 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 */
 		if (inst->mod_accounting_username_bug) {
 			char const *old = vp->vp_strvalue;
-			char *new = talloc_zero_array(vp, char, vp->vp_length + 1);
+			char *new = talloc_zero_array(vp, char, vp->length + 1);
 
-			memcpy(new, old, vp->vp_length);
+			memcpy(new, old, vp->length);
 			vp->vp_strvalue = new;
-			vp->vp_length++;
+			vp->length++;
 
 			rad_const_free(old);
 		}
@@ -503,7 +501,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	 *	We therefore send an EAP Identity request.
 	 */
 	status = eap_start(inst, request);
-	switch (status) {
+	switch(status) {
 	case EAP_NOOP:
 		return RLM_MODULE_NOOP;
 	case EAP_FAIL:
@@ -524,9 +522,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	 *	each EAP sub-module to look for handler->request->username,
 	 *	and to get excited if it doesn't appear.
 	 */
-	vp = fr_pair_find_by_num(request->config, PW_AUTH_TYPE, 0, TAG_ANY);
-	if ((!vp) || (vp->vp_integer != PW_AUTH_TYPE_REJECT)) {
-		vp = pair_make_config("Auth-Type", inst->xlat_name, T_OP_EQ);
+	vp = pairfind(request->config_items, PW_AUTH_TYPE, 0, TAG_ANY);
+	if ((!vp) || (vp->vp_integer != PW_AUTHTYPE_REJECT)) {
+		vp = pairmake_config("Auth-Type", inst->xlat_name, T_OP_EQ);
 		if (!vp) {
 			RDEBUG2("Failed to create Auth-Type %s: %s\n",
 				inst->xlat_name, fr_strerror());
@@ -551,7 +549,6 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *inst, REQUEST *request)
 {
 	size_t		i;
 	size_t		len;
-	ssize_t		ret;
 	char		*p;
 	VALUE_PAIR	*vp;
 	eap_handler_t	*handler;
@@ -625,9 +622,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *inst, REQUEST *request)
 			/*
 			 *	Doesn't exist, add it in.
 			 */
-			vp = fr_pair_find_by_num(request->reply->vps, PW_USER_NAME, 0, TAG_ANY);
+			vp = pairfind(request->reply->vps, PW_USER_NAME, 0, TAG_ANY);
 			if (!vp) {
-				pair_make_reply("User-Name",
+				pairmake_reply("User-Name",
 					       request->username->vp_strvalue,
 					       T_OP_EQ);
 			}
@@ -674,9 +671,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *inst, REQUEST *request)
 	/*
 	 *	The format is very specific.
 	 */
-	if (vp->vp_length != (17 + 34)) {
+	if (vp->length != (17 + 34)) {
 		RDEBUG2("Cisco-AVPair with leap:session-key has incorrect length %zu: Expected %d",
-		       vp->vp_length, 17 + 34);
+		       vp->length, 17 + 34);
 		return RLM_MODULE_NOOP;
 	}
 
@@ -692,33 +689,21 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *inst, REQUEST *request)
 	 *	zero byte.
 	 */
 	i = 34;
-	p = talloc_memdup(vp, vp->vp_strvalue, vp->vp_length + 1);
+	p = talloc_memdup(vp, vp->vp_strvalue, vp->length + 1);	
 	talloc_set_type(p, uint8_t);
-	ret = rad_tunnel_pwdecode((uint8_t *)p + 17, &i, request->home_server->secret, request->proxy->vector);
-	if (ret < 0) {
-		REDEBUG("Decoding leap:session-key failed");
-		talloc_free(p);
-		return RLM_MODULE_FAIL;
-	}
-	len = i;
+	len = rad_tunnel_pwdecode((uint8_t *)p + 17, &i, request->home_server->secret, request->proxy->vector);
 
-	if (i != 16) {
-		REDEBUG("Decoded key length is incorrect, must be 16 bytes");
-		talloc_free(p);
-		return RLM_MODULE_FAIL;
-	}
+	/*
+	 *	FIXME: Assert that i == 16.
+	 */
 
 	/*
 	 *	Encrypt the session key again, using the request data.
 	 */
-	ret = rad_tunnel_pwencode(p + 17, &len, request->client->secret, request->packet->vector);
-	if (ret < 0) {
-		REDEBUG("Decoding leap:session-key failed");
-		talloc_free(p);
-		return RLM_MODULE_FAIL;
-	}
-
-	fr_pair_value_strsteal(vp, p);
+	rad_tunnel_pwencode(p + 17, &len,
+			    request->client->secret,
+			    request->packet->vector);
+	pairstrsteal(vp, p);
 
 	return RLM_MODULE_UPDATED;
 }
@@ -734,23 +719,23 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	/*
 	 * Only build a failure message if something previously rejected the request
 	 */
-	vp = fr_pair_find_by_num(request->config, PW_POST_AUTH_TYPE, 0, TAG_ANY);
+	vp = pairfind(request->config_items, PW_POSTAUTHTYPE, 0, TAG_ANY);
 
-	if (!vp || (vp->vp_integer != PW_POST_AUTH_TYPE_REJECT)) return RLM_MODULE_NOOP;
+	if (!vp || (vp->vp_integer != PW_POSTAUTHTYPE_REJECT)) return RLM_MODULE_NOOP;
 
-	if (!fr_pair_find_by_num(request->packet->vps, PW_EAP_MESSAGE, 0, TAG_ANY)) {
-		RDEBUG3("Request didn't contain an EAP-Message, not inserting EAP-Failure");
+	if (!pairfind(request->packet->vps, PW_EAP_MESSAGE, 0, TAG_ANY)) {
+		RDEBUG2("Request didn't contain an EAP-Message, not inserting EAP-Failure");
 		return RLM_MODULE_NOOP;
 	}
 
-	if (fr_pair_find_by_num(request->reply->vps, PW_EAP_MESSAGE, 0, TAG_ANY)) {
-		RDEBUG3("Reply already contained an EAP-Message, not inserting EAP-Failure");
+	if (pairfind(request->reply->vps, PW_EAP_MESSAGE, 0, TAG_ANY)) {
+		RDEBUG2("Reply already contained an EAP-Message, not inserting EAP-Failure");
 		return RLM_MODULE_NOOP;
 	}
 
 	eap_packet = eap_vp2packet(request, request->packet->vps);
 	if (!eap_packet) {
-		RERROR("Malformed EAP Message: %s", fr_strerror());
+		RERROR("Malformed EAP Message");
 		return RLM_MODULE_FAIL;
 	}
 
@@ -768,9 +753,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	 * Make sure there's a message authenticator attribute in the response
 	 * RADIUS protocol code will calculate the correct value later...
 	 */
-	vp = fr_pair_find_by_num(request->reply->vps, PW_MESSAGE_AUTHENTICATOR, 0, TAG_ANY);
+	vp = pairfind(request->reply->vps, PW_MESSAGE_AUTHENTICATOR, 0, TAG_ANY);
 	if (!vp) {
-		pair_make_reply("Message-Authenticator", "0x00", T_OP_EQ);
+		pairmake_reply("Message-Authenticator", "0x00", T_OP_EQ);
 	}
 
 	return RLM_MODULE_UPDATED;
@@ -780,20 +765,26 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
  *	The module name should be the only globally exported symbol.
  *	That is, everything else should be 'static'.
  */
-extern module_t rlm_eap;
 module_t rlm_eap = {
-	.magic		= RLM_MODULE_INIT,
-	.name		= "eap",
-	.inst_size	= sizeof(rlm_eap_t),
-	.config		= module_config,
-	.instantiate	= mod_instantiate,
-	.detach		= mod_detach,
-	.methods = {
-		[MOD_AUTHENTICATE]	= mod_authenticate,
-		[MOD_AUTHORIZE]		= mod_authorize,
+	RLM_MODULE_INIT,
+	"eap",
+	0,   	/* type */
+	sizeof(rlm_eap_t),
+	module_config,
+	mod_instantiate,		/* instantiation */
+	mod_detach,			/* detach */
+	{
+		mod_authenticate,	/* authentication */
+		mod_authorize,		/* authorization */
+		NULL,			/* preaccounting */
+		NULL,			/* accounting */
+		NULL,			/* checksimul */
+		NULL,			/* pre-proxy */
 #ifdef WITH_PROXY
-		[MOD_POST_PROXY]	= mod_post_proxy,
+		mod_post_proxy,		/* post-proxy */
+#else
+		NULL,
 #endif
-		[MOD_POST_AUTH]		= mod_post_auth
+		mod_post_auth		/* post-auth */
 	},
 };

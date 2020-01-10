@@ -1,8 +1,7 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version.
+ *   it under the terms of the GNU General Public License, version 2 if the
+ *   License as published by the Free Software Foundation.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -27,7 +26,6 @@ RCSID("$Id$")
 #include <freeradius-devel/modules.h>
 #include <freeradius-devel/rad_assert.h>
 #include <freeradius-devel/detail.h>
-#include <freeradius-devel/exfile.h>
 
 #include <ctype.h>
 #include <fcntl.h>
@@ -62,26 +60,21 @@ typedef struct detail_instance {
 
 	bool		log_srcdst;	//!< Add IP src/dst attributes to entries.
 
-	bool		escape;		//!< do filename escaping, yes / no
-
-	xlat_escape_t escape_func; //!< escape function
-
-	exfile_t    	*ef;		//!< Log file handler
+	fr_logfile_t    *lf;		//!< Log file handler
 
 	fr_hash_table_t *ht;		//!< Holds suppressed attributes.
-} rlm_detail_t;
+} detail_instance_t;
 
 static const CONF_PARSER module_config[] = {
-	{ "detailfile", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_DEPRECATED, rlm_detail_t, filename), NULL },
-	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED | PW_TYPE_XLAT, rlm_detail_t, filename), "%A/%{Client-IP-Address}/detail" },
-	{ "header", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_detail_t, header), "%t" },
-	{ "detailperm", FR_CONF_OFFSET(PW_TYPE_INTEGER | PW_TYPE_DEPRECATED, rlm_detail_t, perm), NULL },
-	{ "permissions", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_detail_t, perm), "0600" },
-	{ "group", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_detail_t, group), NULL },
-	{ "locking", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_detail_t, locking), "no" },
-	{ "escape_filenames", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_detail_t, escape), "no" },
-	{ "log_packet_header", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_detail_t, log_srcdst), "no" },
-	CONF_PARSER_TERMINATOR
+	{ "detailfile", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_DEPRECATED, detail_instance_t, filename), NULL },
+	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_OUTPUT | PW_TYPE_REQUIRED, detail_instance_t, filename), "%A/%{Client-IP-Address}/detail" },
+	{ "header", FR_CONF_OFFSET(PW_TYPE_STRING, detail_instance_t, header), "%t" },
+	{ "detailperm", FR_CONF_OFFSET(PW_TYPE_INTEGER | PW_TYPE_DEPRECATED, detail_instance_t, perm), NULL },
+	{ "permissions", FR_CONF_OFFSET(PW_TYPE_INTEGER, detail_instance_t, perm), "0600" },
+	{ "group", FR_CONF_OFFSET(PW_TYPE_STRING, detail_instance_t, group), NULL },
+	{ "locking", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, detail_instance_t, locking), "no" },
+	{ "log_packet_header", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, detail_instance_t, log_srcdst), "no" },
+	{ NULL, -1, 0, NULL, NULL }
 };
 
 
@@ -90,7 +83,7 @@ static const CONF_PARSER module_config[] = {
  */
 static int mod_detach(void *instance)
 {
-	rlm_detail_t *inst = instance;
+	detail_instance_t *inst = instance;
 	if (inst->ht) fr_hash_table_free(inst->ht);
 	return 0;
 }
@@ -110,12 +103,13 @@ static int detail_cmp(void const *a, void const *b)
 	return one - two;
 }
 
+
 /*
  *	(Re-)read radiusd.conf into memory.
  */
 static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
-	rlm_detail_t *inst = instance;
+	detail_instance_t *inst = instance;
 	CONF_SECTION	*cs;
 
 	inst->name = cf_section_name2(conf);
@@ -123,17 +117,8 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		inst->name = cf_section_name1(conf);
 	}
 
-	/*
-	 *	Escape filenames only if asked.
-	 */
-	if (inst->escape) {
-		inst->escape_func = rad_filename_escape;
-	} else {
-		inst->escape_func = rad_filename_make_safe;
-	}
-
-	inst->ef = exfile_init(inst, 256, 30, inst->locking);
-	if (!inst->ef) {
+	inst->lf= fr_logfile_init(inst);
+	if (!inst->lf) {
 		cf_log_err_cs(conf, "Failed creating log file context");
 		return -1;
 	}
@@ -155,7 +140,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 			if (!cf_item_is_pair(ci)) continue;
 
-			attr = cf_pair_attr(cf_item_to_pair(ci));
+			attr = cf_pair_attr(cf_itemtopair(ci));
 			if (!attr) continue; /* pair-anoia */
 
 			da = dict_attrbyname(attr);
@@ -219,15 +204,10 @@ static void detail_vp_print(TALLOC_CTX *ctx, FILE *out, VALUE_PAIR const *stacke
  * @param[in] packet associated with the request (request, reply, proxy-request, proxy-reply...).
  * @param[in] compat Write out entry in compatibility mode.
  */
-static int detail_write(FILE *out, rlm_detail_t *inst, REQUEST *request, RADIUS_PACKET *packet, bool compat)
+static int detail_write(FILE *out, detail_instance_t *inst, REQUEST *request, RADIUS_PACKET *packet, bool compat)
 {
 	VALUE_PAIR *vp;
 	char timestamp[256];
-
-	if (!packet->vps) {
-		RWDEBUG("Skipping empty packet");
-		return 0;
-	}
 
 	if (radius_xlat(timestamp, sizeof(timestamp), request, inst->header, NULL, NULL) < 0) {
 		return -1;
@@ -253,7 +233,7 @@ static int detail_write(FILE *out, rlm_detail_t *inst, REQUEST *request, RADIUS_
 		if (is_radius_code(packet->code)) {
 			WRITE("\tPacket-Type = %s\n", fr_packet_codes[packet->code]);
 		} else {
-			WRITE("\tPacket-Type = %u\n", packet->code);
+			WRITE("\tPacket-Type = %d\n", packet->code);
 		}
 	}
 
@@ -335,8 +315,9 @@ static int detail_write(FILE *out, rlm_detail_t *inst, REQUEST *request, RADIUS_
 			WRITE("\tFreeradius-Proxied-To = %s\n", proxy_buffer);
 		}
 #endif
+
+		WRITE("\tTimestamp = %ld\n", (unsigned long) request->timestamp);
 	}
-	WRITE("\tTimestamp = %ld\n", (unsigned long) request->timestamp);
 
 	WRITE("\n");
 
@@ -358,17 +339,16 @@ static rlm_rcode_t CC_HINT(nonnull) detail_do(void *instance, REQUEST *request, 
 	char		*endptr;
 #endif
 
-	rlm_detail_t *inst = instance;
+	detail_instance_t *inst = instance;
 
 	/*
 	 *	Generate the path for the detail file.  Use the same
 	 *	format, but truncate at the last /.  Then feed it
 	 *	through radius_xlat() to expand the variables.
 	 */
-	if (radius_xlat(buffer, sizeof(buffer), request, inst->filename, inst->escape_func, NULL) < 0) {
+	if (radius_xlat(buffer, sizeof(buffer), request, inst->filename, NULL, NULL) < 0) {
 		return RLM_MODULE_FAIL;
 	}
-
 	RDEBUG2("%s expands to %s", inst->filename, buffer);
 
 #ifdef WITH_ACCOUNTING
@@ -388,16 +368,17 @@ static rlm_rcode_t CC_HINT(nonnull) detail_do(void *instance, REQUEST *request, 
 #endif
 #endif
 
-	outfd = exfile_open(inst->ef, buffer, inst->perm, true);
+	outfd = fr_logfile_open(inst->lf, buffer, inst->perm);
 	if (outfd < 0) {
 		RERROR("Couldn't open file %s: %s", buffer, fr_strerror());
 		return RLM_MODULE_FAIL;
 	}
 
+#ifdef HAVE_GRP_H
 	if (inst->group != NULL) {
 		gid = strtol(inst->group, &endptr, 10);
 		if (*endptr != '\0') {
-			if (rad_getgid(request, &gid, inst->group) < 0) {
+			if (!fr_getgid(inst->group, &gid)) {
 				RDEBUG2("Unable to find system group '%s'", inst->group);
 				goto skip_group;
 			}
@@ -409,6 +390,8 @@ static rlm_rcode_t CC_HINT(nonnull) detail_do(void *instance, REQUEST *request, 
 	}
 
 skip_group:
+#endif
+
 	/*
 	 *	Open the output fp for buffering.
 	 */
@@ -416,7 +399,7 @@ skip_group:
 		RERROR("Couldn't open file %s: %s", buffer, fr_syserror(errno));
 	fail:
 		if (outfp) fclose(outfp);
-		exfile_unlock(inst->ef, outfd);
+		fr_logfile_unlock(inst->lf, outfd);
 		return RLM_MODULE_FAIL;
 	}
 
@@ -426,7 +409,7 @@ skip_group:
 	 *	Flush everything
 	 */
 	fclose(outfp);
-	exfile_unlock(inst->ef, outfd); /* do NOT close outfd */
+	fr_logfile_unlock(inst->lf, outfd); /* do NOT close outfp */
 
 	/*
 	 *	And everything is fine.
@@ -441,7 +424,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 {
 #ifdef WITH_DETAIL
 	if (request->listener->type == RAD_LISTEN_DETAIL &&
-	    strcmp(((rlm_detail_t *)instance)->filename,
+	    strcmp(((detail_instance_t *)instance)->filename,
 		   ((listen_detail_t *)request->listener->data)->filename) == 0) {
 		RDEBUG("Suppressing writes to detail file as the request was just read from a detail file");
 		return RLM_MODULE_NOOP;
@@ -530,27 +513,30 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_proxy(void *instance, REQUEST *requ
 #endif
 
 /* globally exported name */
-extern module_t rlm_detail;
 module_t rlm_detail = {
-	.magic		= RLM_MODULE_INIT,
-	.name		= "detail",
-	.type		= RLM_TYPE_HUP_SAFE,
-	.inst_size	= sizeof(rlm_detail_t),
-	.config		= module_config,
-	.instantiate	= mod_instantiate,
-	.detach		= mod_detach,
-	.methods = {
-		[MOD_AUTHORIZE]		= mod_authorize,
-		[MOD_PREACCT]		= mod_accounting,
-		[MOD_ACCOUNTING]	= mod_accounting,
+	RLM_MODULE_INIT,
+	"detail",
+	RLM_TYPE_HUP_SAFE,
+	sizeof(detail_instance_t),
+	module_config,
+	mod_instantiate,		/* instantiation */
+	mod_detach,			/* detach */
+	{
+		NULL,			/* authentication */
+		mod_authorize,		/* authorization */
+		NULL,			/* preaccounting */
+		mod_accounting,		/* accounting */
+		NULL,			/* checksimul */
 #ifdef WITH_PROXY
-		[MOD_PRE_PROXY]		= mod_pre_proxy,
-		[MOD_POST_PROXY]	= mod_post_proxy,
+		mod_pre_proxy,      	/* pre-proxy */
+		mod_post_proxy,		/* post-proxy */
+#else
+		NULL, NULL,
 #endif
-		[MOD_POST_AUTH]		= mod_post_auth,
+		mod_post_auth		/* post-auth */
 #ifdef WITH_COA
-		[MOD_RECV_COA]		= mod_recv_coa,
-		[MOD_SEND_COA]		= mod_send_coa
+		, mod_recv_coa,
+		mod_send_coa
 #endif
 	},
 };

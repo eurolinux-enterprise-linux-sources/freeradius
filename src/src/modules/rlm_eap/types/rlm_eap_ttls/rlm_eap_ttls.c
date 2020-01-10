@@ -82,14 +82,15 @@ static CONF_PARSER module_config[] = {
 	{ "virtual_server", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_eap_ttls_t, virtual_server), NULL },
 	{ "include_length", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_ttls_t, include_length), "yes" },
 	{ "require_client_cert", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_eap_ttls_t, req_client_cert), "no" },
-	CONF_PARSER_TERMINATOR
+
+	{ NULL, -1, 0, NULL, NULL }	   /* end the list */
 };
 
 
 /*
  *	Attach the module.
  */
-static int mod_instantiate(CONF_SECTION *cs, void **instance)
+static int eapttls_attach(CONF_SECTION *cs, void **instance)
 {
 	rlm_eap_ttls_t		*inst;
 
@@ -100,11 +101,6 @@ static int mod_instantiate(CONF_SECTION *cs, void **instance)
 	 *	Parse the configuration attributes.
 	 */
 	if (cf_section_parse(cs, inst, module_config) < 0) {
-		return -1;
-	}
-
-	if (!inst->virtual_server) {
-		ERROR("rlm_eap_ttls: A 'virtual_server' MUST be defined for security");
 		return -1;
 	}
 
@@ -153,7 +149,7 @@ static ttls_tunnel_t *ttls_alloc(TALLOC_CTX *ctx, rlm_eap_ttls_t *inst)
 /*
  *	Send an initial eap-tls request to the peer, using the libeap functions.
  */
-static int mod_session_init(void *type_arg, eap_handler_t *handler)
+static int eapttls_initiate(void *type_arg, eap_handler_t *handler)
 {
 	int		status;
 	tls_session_t	*ssn;
@@ -165,6 +161,7 @@ static int mod_session_init(void *type_arg, eap_handler_t *handler)
 	inst = type_arg;
 
 	handler->tls = true;
+	handler->finished = false;
 
 	/*
 	 *	Check if we need a client certificate.
@@ -174,7 +171,7 @@ static int mod_session_init(void *type_arg, eap_handler_t *handler)
 	 * EAP-TLS-Require-Client-Cert attribute will override
 	 * the require_client_cert configuration option.
 	 */
-	vp = fr_pair_find_by_num(handler->request->config, PW_EAP_TLS_REQUIRE_CLIENT_CERT, 0, TAG_ANY);
+	vp = pairfind(handler->request->config_items, PW_EAP_TLS_REQUIRE_CLIENT_CERT, 0, TAG_ANY);
 	if (vp) {
 		client_cert = vp->vp_integer ? true : false;
 	} else {
@@ -198,17 +195,15 @@ static int mod_session_init(void *type_arg, eap_handler_t *handler)
 	 *	related handshaking or application data.
 	 */
 	status = eaptls_start(handler->eap_ds, ssn->peap_flag);
-	if ((status == FR_TLS_INVALID) || (status == FR_TLS_FAIL)) {
-		REDEBUG("[eaptls start] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
-	} else {
-		RDEBUG2("[eaptls start] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
+	RDEBUG2("Start returned %d", status);
+	if (status == 0) {
+		return 0;
 	}
-	if (status == 0) return 0;
 
 	/*
 	 *	The next stage to process the packet.
 	 */
-	handler->stage = PROCESS;
+	handler->stage = AUTHENTICATE;
 
 	return 1;
 }
@@ -217,7 +212,7 @@ static int mod_session_init(void *type_arg, eap_handler_t *handler)
 /*
  *	Do authentication, by letting EAP-TLS do most of the work.
  */
-static int mod_process(void *arg, eap_handler_t *handler)
+static int mod_authenticate(void *arg, eap_handler_t *handler)
 {
 	int rcode;
 	fr_tls_status_t	status;
@@ -234,12 +229,7 @@ static int mod_process(void *arg, eap_handler_t *handler)
 	 *	Process TLS layer until done.
 	 */
 	status = eaptls_process(handler);
-	if ((status == FR_TLS_INVALID) || (status == FR_TLS_FAIL)) {
-		REDEBUG("[eaptls process] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
-	} else {
-		RDEBUG2("[eaptls process] = %s", fr_int2str(fr_tls_status_table, status, "<INVALID>"));
-	}
-
+	RDEBUG2("eaptls_process returned %d\n", status);
 	switch (status) {
 	/*
 	 *	EAP-TLS handshake was successful, tell the
@@ -257,8 +247,8 @@ static int mod_process(void *arg, eap_handler_t *handler)
 		if (t && t->authenticated) {
 			if (t->accept_vps) {
 				RDEBUG2("Using saved attributes from the original Access-Accept");
-				rdebug_pair_list(L_DBG_LVL_2, request, t->accept_vps, NULL);
-				fr_pair_list_mcopy_by_num(handler->request->reply,
+				debug_pair_list(t->accept_vps);
+				pairfilter(handler->request->reply,
 					   &handler->request->reply->vps,
 					   &t->accept_vps, 0, 0, TAG_ANY);
 			} else if (t->use_tunneled_reply) {
@@ -344,6 +334,7 @@ static int mod_process(void *arg, eap_handler_t *handler)
 		rad_assert(handler->request->proxy != NULL);
 #endif
 		return 1;
+		break;
 
 	default:
 		break;
@@ -360,10 +351,11 @@ static int mod_process(void *arg, eap_handler_t *handler)
  *	The module name should be the only globally exported symbol.
  *	That is, everything else should be 'static'.
  */
-extern rlm_eap_module_t rlm_eap_ttls;
 rlm_eap_module_t rlm_eap_ttls = {
-	.name		= "eap_ttls",
-	.instantiate	= mod_instantiate,	/* Create new submodule instance */
-	.session_init	= mod_session_init,	/* Initialise a new EAP session */
-	.process	= mod_process		/* Process next round of EAP method */
+	"eap_ttls",
+	eapttls_attach,			/* attach */
+	eapttls_initiate,		/* Start the initial request */
+	NULL,				/* authorization */
+	mod_authenticate,		/* authentication */
+	NULL				/* detach */
 };

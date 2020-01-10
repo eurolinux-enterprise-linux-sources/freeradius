@@ -57,7 +57,8 @@ typedef struct eap_ds {
  */
 typedef enum operation_t {
 	INITIATE = 0,
-	PROCESS
+	AUTHORIZE,
+	AUTHENTICATE
 } operation_t;
 
 
@@ -118,8 +119,8 @@ typedef struct _eap_handler {
 
 	int		trips;
 
-	bool		tls;
-	bool		finished;
+	int		tls;
+	int		finished;
 	VALUE_PAIR	*certs;
 } eap_handler_t;
 
@@ -127,12 +128,12 @@ typedef struct _eap_handler {
  * Interface to call EAP sub mdoules
  */
 typedef struct rlm_eap_module {
-	char const *name;						//!< The name of the sub-module
-									//!< (without rlm_ prefix).
-	int (*instantiate)(CONF_SECTION *conf, void **instance);	//!< Create a new submodule instance.
-	int (*session_init)(void *instance, eap_handler_t *handler);	//!< Initialise a new EAP session.
-	int (*process)(void *instance, eap_handler_t *handler);		//!< Continue an EAP session.
-	int (*detach)(void *instance);					//!< Destroy a submodule instance.
+	char const *name;
+	int (*attach)(CONF_SECTION *conf, void **instance);
+	int (*initiate)(void *instance, eap_handler_t *handler);
+	int (*authorize)(void *instance, eap_handler_t *handler);
+	int (*authenticate)(void *instance, eap_handler_t *handler);
+	int (*detach)(void *instance);
 } rlm_eap_module_t;
 
 #define REQUEST_DATA_EAP_HANDLER	 (1)

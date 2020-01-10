@@ -37,6 +37,13 @@ RCSID("$Id$")
 #include	<sys/stat.h>
 #endif
 
+
+#define DICT_VALUE_MAX_NAME_LEN (128)
+#define DICT_VENDOR_MAX_NAME_LEN (128)
+#define DICT_ATTR_MAX_NAME_LEN (128)
+
+#define DICT_ATTR_SIZE sizeof(DICT_ATTR) + DICT_ATTR_MAX_NAME_LEN
+
 static fr_hash_table_t *vendors_byname = NULL;
 static fr_hash_table_t *vendors_byvalue = NULL;
 
@@ -87,7 +94,7 @@ const FR_NAME_NUMBER dict_attr_types[] = {
 	{ "byte",	PW_TYPE_BYTE },
 	{ "short",	PW_TYPE_SHORT },
 	{ "ether",	PW_TYPE_ETHERNET },
-	{ "combo-ip",	PW_TYPE_COMBO_IP_ADDR },
+	{ "combo-ip",	PW_TYPE_IP_ADDR },
 	{ "tlv",	PW_TYPE_TLV },
 	{ "signed",	PW_TYPE_SIGNED },
 	{ "extended",	PW_TYPE_EXTENDED },
@@ -109,21 +116,21 @@ const FR_NAME_NUMBER dict_attr_types[] = {
  *	Map data types to min / max data sizes.
  */
 const size_t dict_attr_sizes[PW_TYPE_MAX][2] = {
-	[PW_TYPE_INVALID]	= {~0, 0},
-	[PW_TYPE_STRING]	= {0, ~0},
+	[PW_TYPE_INVALID]	= { ~0, 0 },
+	[PW_TYPE_STRING]	= { 0, ~0 },
 	[PW_TYPE_INTEGER]	= {4, 4 },
 	[PW_TYPE_IPV4_ADDR]	= {4, 4},
 	[PW_TYPE_DATE]		= {4, 4},
 	[PW_TYPE_ABINARY]	= {32, ~0},
 	[PW_TYPE_OCTETS]	= {0, ~0},
 	[PW_TYPE_IFID]		= {8, 8},
-	[PW_TYPE_IPV6_ADDR]	= {16, 16},
+	[PW_TYPE_IPV6_ADDR]	= { 16, 16},
 	[PW_TYPE_IPV6_PREFIX]	= {2, 18},
 	[PW_TYPE_BYTE]		= {1, 1},
 	[PW_TYPE_SHORT]		= {2, 2},
 	[PW_TYPE_ETHERNET]	= {6, 6},
 	[PW_TYPE_SIGNED]	= {4, 4},
-	[PW_TYPE_COMBO_IP_ADDR]	= {4, 16},
+	[PW_TYPE_IP_ADDR]	= {4, 16},
 	[PW_TYPE_TLV]		= {2, ~0},
 	[PW_TYPE_EXTENDED]	= {2, ~0},
 	[PW_TYPE_LONG_EXTENDED]	= {3, ~0},
@@ -160,12 +167,8 @@ const size_t dict_attr_sizes[PW_TYPE_MAX][2] = {
 int const fr_attr_max_tlv = MAX_TLV_NEST;
 int const fr_attr_shift[MAX_TLV_NEST + 1] = { 0, 8, 16, 24, 29 };
 
-unsigned const fr_attr_mask[MAX_TLV_NEST + 1] = { 0xff, 0xff, 0xff, 0x1f, 0x07 };
+int const fr_attr_mask[MAX_TLV_NEST + 1] = { 0xff, 0xff, 0xff, 0x1f, 0x07 };
 
-/*
- *	attr & fr_attr_parent_mask[i] == Nth parent of attr
- */
-static unsigned int const fr_attr_parent_mask[MAX_TLV_NEST + 1] = { 0, 0x000000ff, 0x0000ffff, 0x00ffffff, 0x1fffffff };
 
 /*
  *	Create the hash of the name.
@@ -599,23 +602,22 @@ int dict_addvendor(char const *name, unsigned int value)
 }
 
 const int dict_attr_allowed_chars[256] = {
-/* 0x   0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f */
-/* 0 */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* 1 */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* 2 */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1,
-/* 3 */ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
-/* 4 */ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-/* 5 */ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1,
-/* 6 */ 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-/* 7 */ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0,
-/* 8 */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* 9 */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* a */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* b */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* c */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* d */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* e */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-/* f */ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0,
+	0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1,
+	0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
 /*
@@ -629,7 +631,7 @@ int dict_valid_name(char const *name)
 		if (!dict_attr_allowed_chars[*p]) {
 			char buff[5];
 
-			fr_prints(buff, sizeof(buff), (char const *)p, 1, '\'');
+			fr_print_string((char const *)p, 1, buff, sizeof(buff));
 			fr_strerror_printf("Invalid character '%s' in attribute", buff);
 
 			return -(p - (uint8_t const *)name);
@@ -639,94 +641,16 @@ int dict_valid_name(char const *name)
 	return 0;
 }
 
-
 /*
- *	Find the parent of the attr/vendor.
- */
-DICT_ATTR const *dict_parent(unsigned int attr, unsigned int vendor)
-{
-	int i;
-	unsigned int base_vendor;
-
-	/*
-	 *	RFC attributes can't be of type "tlv", except for dictionary.rfc6930
-	 */
-	if (!vendor) {
-#ifdef PW_IPV6_6RD_CONFIGURATION
-		if (attr == PW_IPV6_6RD_CONFIGURATION) return NULL;
-
-		if (((attr & 0xff) == PW_IPV6_6RD_CONFIGURATION) &&
-		    (attr >> 8) < 4) {
-			return dict_attrbyvalue(PW_IPV6_6RD_CONFIGURATION, 0);
-		}
-#endif
-		return NULL;
-	}
-
-	base_vendor = vendor & (FR_MAX_VENDOR - 1);
-
-	/*
-	 *	It's a real vendor.
-	 */
-	if (base_vendor != 0) {
-		DICT_VENDOR const *dv;
-
-		dv = dict_vendorbyvalue(base_vendor);
-		if (!dv) return NULL;
-
-		/*
-		 *	Only standard format attributes can be of type "tlv",
-		 *	Except for DHCP.  <sigh>
-		 */
-		if ((vendor != 54) && ((dv->type != 1) || (dv->length != 1))) return NULL;
-
-		for (i = MAX_TLV_NEST; i > 0; i--) {
-			unsigned int parent;
-
-			parent = attr & fr_attr_parent_mask[i];
-
-			if (parent != attr) return dict_attrbyvalue(parent, vendor); /* not base_vendor */
-		}
-
-		/*
-		 *	It was a top-level VSA.  There's no parent.
-		 *	We COULD return the appropriate enclosing VSA
-		 *	(26, or 241.26, etc.) but that's not what we
-		 *	want.
-		 */
-		return NULL;
-	}
-
-	/*
-	 *	It's an extended attribute.  Return the base Extended-Attr-X
-	 */
-	if (attr < 256) return dict_attrbyvalue((vendor / FR_MAX_VENDOR) & 0xff, 0);
-
-	/*
-	 *	Figure out which attribute it is.
-	 */
-	for (i = MAX_TLV_NEST; i > 0; i--) {
-		unsigned int parent;
-
-		parent = attr & fr_attr_parent_mask[i];
-		if (parent != attr) return dict_attrbyvalue(parent, vendor); /* not base_vendor */
-	}
-
-	return NULL;
-}
-
-
-/** Add an attribute to the dictionary
- *
- * @return 0 on success -1 on failure.
+ *	Add an attribute to the dictionary.
  */
 int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 		 ATTR_FLAGS flags)
 {
 	size_t namelen;
-	DICT_ATTR const	*parent;
-	DICT_ATTR *n;
 	static int      max_attr = 0;
+	DICT_ATTR const	*da;
+	DICT_ATTR *n;
 
 	namelen = strlen(name);
 	if (namelen >= DICT_ATTR_MAX_NAME_LEN) {
@@ -742,13 +666,6 @@ int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 		return -1;
 	}
 
-	/*
-	 *	Disallow attributes of type zero.
-	 */
-	if (!attr && !vendor) {
-		fr_strerror_printf("dict_addattr: Attribute 0 is invalid and cannot be used");
-		return -1;
-	}
 
 	/*
 	 *	If the attr is '-1', that means use a pre-existing
@@ -773,61 +690,6 @@ int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 	}
 
 	/*
-	 *	Check the parent attribute, and set the various flags
-	 *	based on the parents values.  It's OK for the caller
-	 *	to not set them, as we'll set them.  But if the caller
-	 *	sets them when he's not supposed to set them, that's
-	 *	an error.
-	 */
-	parent = dict_parent(attr, vendor);
-	if (parent) {
-		/*
-		 *	We're still in the same space and the parent isn't a TLV.  That's an error.
-		 *
-		 *	Otherwise, dict_parent() has taken us from an Extended sub-attribute to
-		 *	a *the* Extended attribute, whish isn't what we want here.
-		 */
-		if ((vendor == parent->vendor) && (parent->type != PW_TYPE_TLV)) {
-			fr_strerror_printf("dict_addattr: Attribute %s has parent attribute %s which is not of type 'tlv'",
-					   name, parent->name);
-			return -1;
-		}
-
-		flags.extended |= parent->flags.extended;
-		flags.long_extended |= parent->flags.long_extended;
-		flags.evs |= parent->flags.evs;
-	}
-
-	/*
-	 *	Manually extended flags for extended attributes.  We
-	 *	can't expect the caller to know all of the details of the flags.
-	 */
-	if (vendor >= FR_MAX_VENDOR) {
-		DICT_ATTR const *da;
-
-		/*
-		 *	Trying to manually create an extended
-		 *	attribute, but the parent extended attribute
-		 *	doesn't exist?  That's an error.
-		 */
-		da = dict_attrbyvalue(vendor / FR_MAX_VENDOR, 0);
-		if (!da) {
-			fr_strerror_printf("Extended attributes must be defined from the extended space");
-			return -1;
-		}
-
-		flags.extended |= da->flags.extended;
-		flags.long_extended |= da->flags.long_extended;
-		flags.evs |= da->flags.evs;
-
-		/*
-		 *	There's still a real vendor.  Since it's an
-		 *	extended attribute, set the EVS flag.
-		 */
-		if ((vendor & (FR_MAX_VENDOR -1)) != 0) flags.evs = 1;
-	}
-
-	/*
 	 *	Additional checks for extended attributes.
 	 */
 	if (flags.extended || flags.long_extended || flags.evs) {
@@ -839,7 +701,7 @@ int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 #ifdef WITH_DHCP
 		    || flags.array
 #endif
-		    || ((flags.encrypt != FLAG_ENCRYPT_NONE) && (flags.encrypt != FLAG_ENCRYPT_TUNNEL_PASSWORD))) {
+		    || (flags.encrypt != FLAG_ENCRYPT_NONE)) {
 			fr_strerror_printf("dict_addattr: The \"extended\" attributes MUST NOT have any flags set");
 			return -1;
 		}
@@ -850,11 +712,28 @@ int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 			fr_strerror_printf("dict_addattr: Attributes of type \"evs\" MUST have a parent of type \"extended\"");
 			return -1;
 		}
+
+		/* VSAs cannot be of format EVS */
+		if ((vendor & (FR_MAX_VENDOR - 1)) != 0) {
+			fr_strerror_printf("dict_addattr: Attribute of type \"evs\" fails internal sanity check");
+			return -1;
+		}
 	}
 
 	/*
-	 *	Do various sanity checks.
+	 *	Allow for generic pointers
 	 */
+	switch (type) {
+	default:
+		break;
+
+	case PW_TYPE_STRING:
+	case PW_TYPE_OCTETS:
+	case PW_TYPE_TLV:
+		flags.is_pointer = true;
+		break;
+	}
+
 	if (attr < 0) {
 		fr_strerror_printf("dict_addattr: ATTRIBUTE has invalid number (less than zero)");
 		return -1;
@@ -880,118 +759,6 @@ int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 			     (flags.encrypt != FLAG_ENCRYPT_NONE))) {
 		fr_strerror_printf("The \"concat\" flag cannot be used with any other flag");
 		return -1;
-	}
-
-	if (flags.length && (type != PW_TYPE_OCTETS)) {
-		fr_strerror_printf("The \"length\" flag can only be set for attributes of type \"octets\"");
-		return -1;
-	}
-
-	if (flags.length && (flags.has_tag || flags.array || flags.is_tlv || flags.has_tlv ||
-			     flags.concat || flags.evs || flags.extended || flags.long_extended ||
-			     (flags.encrypt > FLAG_ENCRYPT_USER_PASSWORD))) {
-		fr_strerror_printf("The \"length\" flag cannot be used with any other flag");
-		return -1;
-	}
-
-	/*
-	 *	Force "length" for data types of fixed length;
-	 */
-	switch (type) {
-	case PW_TYPE_BYTE:
-		flags.length = 1;
-		break;
-
-	case PW_TYPE_SHORT:
-		flags.length = 2;
-		break;
-
-	case PW_TYPE_DATE:
-	case PW_TYPE_IPV4_ADDR:
-	case PW_TYPE_INTEGER:
-	case PW_TYPE_SIGNED:
-		flags.length = 4;
-		break;
-
-	case PW_TYPE_INTEGER64:
-		flags.length = 8;
-		break;
-
-	case PW_TYPE_ETHERNET:
-		flags.length = 6;
-		break;
-
-	case PW_TYPE_IFID:
-		flags.length = 8;
-		break;
-
-	case PW_TYPE_IPV6_ADDR:
-		flags.length = 16;
-		break;
-
-	case PW_TYPE_EXTENDED:
-		if ((vendor != 0) || (attr < 241)) {
-			fr_strerror_printf("Attributes of type \"extended\" MUST be "
-					   "RFC attributes with value >= 241.");
-			return -1;
-		}
-
-		flags.length = 0;
-		flags.extended = 1;
-		break;
-
-	case PW_TYPE_LONG_EXTENDED:
-		if ((vendor != 0) || (attr < 241)) {
-			fr_strerror_printf("Attributes of type \"long-extended\" MUST "
-					   "be RFC attributes with value >= 241.");
-			return -1;
-		}
-
-		flags.length = 0;
-		flags.extended = 1;
-		flags.long_extended = 1;
-		break;
-
-	case PW_TYPE_EVS:
-		if (attr != PW_VENDOR_SPECIFIC) {
-			fr_strerror_printf("Attributes of type \"evs\" MUST have "
-					   "attribute code 26.");
-			return -1;
-		}
-
-		flags.length = 0;
-		flags.extended = 1;
-		flags.evs = 1;
-		break;
-
-	case PW_TYPE_STRING:
-	case PW_TYPE_OCTETS:
-	case PW_TYPE_TLV:
-		flags.is_pointer = true;
-		break;
-
-	default:
-		break;
-	}
-
-	/*
-	 *	Stupid hacks for MS-CHAP-MPPE-Keys.  The User-Password
-	 *	encryption method has no provisions for encoding the
-	 *	length of the data.  For User-Password, the data is
-	 *	(presumably) all printable non-zero data.  For
-	 *	MS-CHAP-MPPE-Keys, the data is binary crap.  So... we
-	 *	MUST specify a length in the dictionary.
-	 */
-	if ((flags.encrypt == FLAG_ENCRYPT_USER_PASSWORD) && (type != PW_TYPE_STRING)) {
-		if (type != PW_TYPE_OCTETS) {
-			fr_strerror_printf("The \"encrypt=1\" flag cannot be used with non-string data types");
-			return -1;
-		}
-
-		if (flags.length == 0) {
-			fr_strerror_printf("The \"encrypt=1\" flag MUST be used with an explicit length for 'octets' data types");
-			return -1;
-		}
 	}
 
 	if ((vendor & (FR_MAX_VENDOR -1)) != 0) {
@@ -1039,12 +806,6 @@ int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 			return -1;
 		}
 
-		if (!attr && dv->type != 1) {
-			fr_strerror_printf("dict_addattr: Attribute %s cannot have value zero",
-					   name);
-			return -1;
-		}
-
 		/*
 		 *	FIXME: Switch over dv->type, and limit things
 		 *	properly.
@@ -1055,6 +816,49 @@ int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 		} /* else 256..65535 are allowed */
 
 		/*
+		 *	If the attribute is in the standard space, AND
+		 *	has a sub-type (e.g. 241.1 or 255.3), then its
+		 *	number is placed into the upper 8 bits of the
+		 *	vendor field.
+		 *
+		 *	This also happens for the new VSAs.
+		 *
+		 *	If we find it, then set the various flags
+		 *	based on what we see.
+		 */
+		if (vendor >= FR_MAX_VENDOR) {
+			unsigned int parent;
+
+			parent = (vendor / FR_MAX_VENDOR) & 0xff;
+
+			da = dict_attrbyvalue(parent, 0);
+			if (!da) {
+				fr_strerror_printf("dict_addattr: ATTRIBUTE refers to unknown parent attribute %u.", parent);
+				return -1;
+			}
+
+			/*
+			 *	These flags are inherited from the
+			 *	parent.
+			 */
+			flags.extended = da->flags.extended;
+			flags.long_extended = da->flags.long_extended;
+
+			/*
+			 *	Non-extended attributes can't have VSAs.
+			 */
+			if (!flags.extended &&
+			    ((vendor & (FR_MAX_VENDOR - 1)) != 0)) {
+				fr_strerror_printf("dict_addattr: ATTRIBUTE cannot be a VSA");
+				return -1;
+			}
+
+			if ((vendor & (FR_MAX_VENDOR - 1)) != 0) {
+				flags.evs = 1;
+			}
+		}
+
+		/*
 		 *	<sigh> Alvarion, being *again* a horribly
 		 *	broken vendor, has re-used the WiMAX format in
 		 *	their proprietary vendor space.  This re-use
@@ -1062,7 +866,7 @@ int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 		 *	Alvarion dictionaries.
 		 */
 		flags.wimax = dv->flags;
-	} /* it's a VSA of some kind */
+	}
 
 	/*
 	 *	Create a new attribute for the list
@@ -1133,19 +937,19 @@ int dict_addattr(char const *name, int attr, unsigned int vendor, PW_TYPE type,
 	/*
 	 *	Hacks for combo-IP
 	 */
-	if (n->type == PW_TYPE_COMBO_IP_ADDR) {
+	if (n->type == PW_TYPE_IP_ADDR) {
 		DICT_ATTR *v4, *v6;
 
-		v4 = fr_pool_alloc(sizeof(*v4) + namelen);
+		v4 = fr_pool_alloc(sizeof(*v4));
 		if (!v4) goto oom;
 
-		v6 = fr_pool_alloc(sizeof(*v6) + namelen);
+		v6 = fr_pool_alloc(sizeof(*v6));
 		if (!v6) goto oom;
 
-		memcpy(v4, n, sizeof(*v4) + namelen);
+		memcpy(v4, n, sizeof(*v4));
 		v4->type = PW_TYPE_IPV4_ADDR;
 
-		memcpy(v6, n, sizeof(*v6) + namelen);
+		memcpy(v6, n, sizeof(*v6));
 		v6->type = PW_TYPE_IPV6_ADDR;
 		if (!fr_hash_table_replace(attributes_combo, v4)) {
 			fr_strerror_printf("dict_addattr: Failed inserting attribute name %s - IPv4", name);
@@ -1360,8 +1164,6 @@ static int sscanf_i(char const *str, unsigned int *pvalue)
  *
  *	Remember, the packing format is weird.
  *
- *	Vendor  Attribute
- *	------  ---------
  *	00VID	000000AA	normal VSA for vendor VID
  *	00VID	AABBCCDD	normal VSAs with TLVs
  *	EE000   000000AA	extended attr (241.1)
@@ -1375,12 +1177,8 @@ int dict_str2oid(char const *ptr, unsigned int *pvalue, unsigned int *pvendor,
 		 int tlv_depth)
 {
 	char const *p;
-	unsigned int attr;
-	
-#ifdef WITH_DICT_OID_DEBUG
-	fprintf(stderr, "PARSING %s tlv_depth %d pvalue %08x pvendor %08x\n", ptr,
-		tlv_depth, *pvalue, *pvendor);
-#endif
+	unsigned int value;
+	DICT_ATTR const *da = NULL;
 
 	if (tlv_depth > fr_attr_max_tlv) {
 		fr_strerror_printf("Too many sub-attributes");
@@ -1388,197 +1186,119 @@ int dict_str2oid(char const *ptr, unsigned int *pvalue, unsigned int *pvendor,
 	}
 
 	/*
-	 *	No vendor, try to do basic parsing.
+	 *	If *pvalue is set, check if the attribute exists.
+	 *	Otherwise, check that the vendor exists.
 	 */
-	if (!*pvendor && !*pvalue) {
-		/*
-		 *	Can't call us with a pre-parsed value and no vendor.
-		 */
-		if (tlv_depth != 0) {
-			fr_strerror_printf("Invalid call with wrong TLV depth %d", tlv_depth);
+	if (*pvalue) {
+		da = dict_attrbyvalue(*pvalue, *pvendor);
+		if (!da) {
+			fr_strerror_printf("Parent attribute is undefined");
 			return -1;
 		}
 
-		p = strchr(ptr, '.');
-		if (!sscanf_i(ptr, &attr)) {
-			fr_strerror_printf("Invalid data '%s' in attribute identifier", ptr);
+		if (!da->flags.has_tlv && !da->flags.extended) {
+			fr_strerror_printf("Parent attribute %s cannot have sub-attributes",
+					   da->name);
 			return -1;
 		}
 
-		/*
-		 *	Normal attribute with no OID.  Return it.
-		 */
+	} else if ((*pvendor & (FR_MAX_VENDOR - 1)) != 0) {
+		if (!dict_vendorbyvalue(*pvendor & (FR_MAX_VENDOR - 1))) {
+			fr_strerror_printf("Unknown vendor %u",
+					   *pvendor & (FR_MAX_VENDOR - 1));
+			return -1;
+		}
+	}
+
+	p = strchr(ptr, '.');
+
+	/*
+	 *	Look for 26.VID.x.y
+	 *
+	 *	If we find it, re-write the parameters, and recurse.
+	 */
+	if (!*pvendor && (tlv_depth == 0) && (*pvalue == PW_VENDOR_SPECIFIC)) {
+		DICT_VENDOR const *dv;
+
 		if (!p) {
-			*pvalue = attr;
-			goto done;
-		}
-
-		/*
-		 *	We have an OID, look up the attribute to see what it is.
-		 */
-		if (attr != PW_VENDOR_SPECIFIC) {
-			DICT_ATTR const *da;
-
-			da = dict_attrbyvalue(attr, 0);
-			if (!da) {
-				*pvalue = attr;
-				goto done;
-			}
-
-			/*
-			 *	Standard attributes (including internal
-			 *	ones) can have TLVs, but only for some
-			 *	of them.
-			 */
-			if (!da->flags.extended) {
-#ifdef PW_IPV6_6RD_CONFIGURATION
-				if (attr == PW_IPV6_6RD_CONFIGURATION) {
-					*pvalue = attr;
-					ptr = p + 1;
-					tlv_depth = 1;
-					goto keep_parsing;
-				}
-#endif
-				fr_strerror_printf("Standard attributes cannot use OIDs");
-				return -1;
-			}
-
-			*pvendor = attr * FR_MAX_VENDOR;
-			ptr = p + 1;
-		} /* and fall through to re-parsing the VSA */
-
-		/*
-		 *	Look for the attribute number.
-		 */
-		if (!sscanf_i(ptr, &attr)) {
-			fr_strerror_printf("Invalid data '%s' in attribute identifier", ptr);
+			fr_strerror_printf("VSA needs to have sub-attribute");
 			return -1;
 		}
 
-		p = strchr(ptr, '.');
+		if (!sscanf_i(ptr, pvendor)) {
+			fr_strerror_printf("Invalid number in attribute");
+			return -1;
+		}
+
+		if (*pvendor >= FR_MAX_VENDOR) {
+			fr_strerror_printf("Cannot handle vendor ID larger than 2^24");
+
+			return -1;
+		}
+
+		dv = dict_vendorbyvalue(*pvendor & (FR_MAX_VENDOR - 1));
+		if (!dv) {
+			fr_strerror_printf("Unknown vendor \"%u\" ",
+					   *pvendor  & (FR_MAX_VENDOR - 1));
+			return -1;
+		}
 
 		/*
-		 *	Handle VSAs.  Either in the normal space, or in the extended space.
+		 *	Start off with (attr=0, vendor=VID), and
+		 *	recurse.  This causes the various checks above
+		 *	to be done.
 		 */
-		if (attr == PW_VENDOR_SPECIFIC) {
-			if (!p) {
-				*pvalue = attr;
-				goto done;
-			}
-			ptr = p + 1;
+		*pvalue = 0;
+		return dict_str2oid(p + 1, pvalue, pvendor, 0);
+	}
 
-			if (!sscanf_i(ptr, &attr)) {
-				fr_strerror_printf("Invalid data '%s' in vendor identifier", ptr);
-				return -1;
-			}
+	if (!sscanf_i(ptr, &value)) {
+		fr_strerror_printf("Invalid number in attribute");
+		return -1;
+	}
 
-			p = strchr(ptr, '.');
-			if (!p) {
-				fr_strerror_printf("Cannot define VENDOR in an ATTRIBUTE");
-				return -1;
-			}
-			ptr = p + 1;
+	if (!*pvendor && (tlv_depth == 1) && da &&
+	    (da->flags.has_tlv || da->flags.extended)) {
 
-			*pvendor |= attr;
-		} else {
-			*pvalue = attr;
-		}
-	} /* fall through to processing an OID with pre-defined *pvendor and *pvalue */
 
-keep_parsing:
-#ifdef WITH_DICT_OID_DEBUG
-	fprintf(stderr, "KEEP PARSING %s tlv_depth %d pvalue %08x pvendor %08x\n", ptr,
-		tlv_depth, *pvalue, *pvendor);
-#endif
+		*pvendor = *pvalue * FR_MAX_VENDOR;
+		*pvalue = value;
 
-	/*
-	 *	Check the vendor.  Only RFC format attributes can have TLVs.
-	 */
-	if (*pvendor) {
-		DICT_VENDOR const *dv = NULL;
-
-		dv = dict_vendorbyvalue(*pvendor);
-		if (dv && (dv->type != 1)) {
-			if (*pvalue || (tlv_depth != 0)) {
-				fr_strerror_printf("Attribute cannot have TLVs");
-				return -1;
-			}
-
-			if (!sscanf_i(ptr, &attr)) {
-				fr_strerror_printf("Invalid data '%s' in attribute identifier", ptr);
-				return -1;
-			}
-
-			if ((dv->type < 3) && (attr > (unsigned int) (1 << (8 * dv->type)))) {
-				fr_strerror_printf("Number '%s' out of allowed range in attribute identifier", ptr);
-				return -1;
-			}
-			
-			*pvalue = attr;
-
-#ifdef WITH_DHCP
-			/*
-			 *	DHCP attributes can have TLVs. <sigh>
-			 */
-			if (*pvendor == 54) goto dhcp_skip;
-#endif
-			goto done;
-		}
+		if (!p) return 0;
+		return dict_str2oid(p + 1, pvalue, pvendor, 1);
 	}
 
 	/*
-	 *	Parse the rest of the TLVs.
+	 *	And pack the data according to the scheme described in
+	 *	the comments at the start of this function.
 	 */
-	while (tlv_depth <= fr_attr_max_tlv) {
-#ifdef WITH_DICT_OID_DEBUG
-		fprintf(stderr, "TLV  PARSING %s tlv_depth %d pvalue %08x pvendor %08x\n", ptr,
-			tlv_depth, *pvalue, *pvendor);
-#endif
-
-		if (!sscanf_i(ptr, &attr)) {
-			fr_strerror_printf("Invalid data '%s' in attribute identifier", ptr);
-			return -1;
-		}
-
-		if (attr > fr_attr_mask[tlv_depth]) {
-			fr_strerror_printf("Number '%s' out of allowed range in attribute identifier", ptr);
-			return -1;
-		}
-
-		attr <<= fr_attr_shift[tlv_depth];
-
-#ifdef WITH_DICT_OID_DEBUG
-		if (*pvendor) {
-			DICT_ATTR const *da;
-
-			da = dict_parent(*pvalue | attr, *pvendor);
-			if (!da) {
-				fprintf(stderr, "STR2OID FAILED PARENT %08x | %08x, %08x\n",
-					*pvalue, attr, *pvendor);
-			} else if ((da->attr != *pvalue) || (da->vendor != *pvendor)) {
-				fprintf(stderr, "STR2OID DISAGREEMENT WITH PARENT %08x, %08x\t%08x, %08x\n",
-					*pvalue, *pvendor, da->attr, da->vendor);
-			}
-		}
-#endif
-
-		*pvalue |= attr;
-
-#ifdef WITH_DHCP
-	dhcp_skip:
-#endif
-		p = strchr(ptr, '.');
-		if (!p) break;
-
-		ptr = p + 1;
-		tlv_depth++;
+	if (*pvalue) {
+		*pvalue |= (value & fr_attr_mask[tlv_depth]) << fr_attr_shift[tlv_depth];
+	} else {
+		*pvalue = value;
 	}
 
-done:
-#ifdef WITH_DICT_OID_DEBUG
-	fprintf(stderr, "RETURNING %08x %08x\n", *pvalue, *pvendor);
-#endif
-	return 0;
+	if (p) {
+		return dict_str2oid(p + 1, pvalue, pvendor, tlv_depth + 1);
+	}
+
+	return tlv_depth;
+}
+
+/*
+ *	Bamboo skewers under the fingernails in 5, 4, 3, 2, ...
+ */
+static DICT_ATTR const *dict_parent(unsigned int attr, unsigned int vendor)
+{
+	if (vendor < FR_MAX_VENDOR) {
+		return dict_attrbyvalue(attr & 0xff, vendor);
+	}
+
+	if (attr < 256) {
+		return dict_attrbyvalue((vendor / FR_MAX_VENDOR) & 0xff, 0);
+	}
+
+	return dict_attrbyvalue(attr & 0xff, vendor);
 }
 
 
@@ -1594,7 +1314,7 @@ static int process_attribute(char const* fn, int const line,
 	unsigned int    vendor = 0;
 	unsigned int	value;
 	int		type;
-	unsigned int	length;
+	unsigned int	length = 0;
 	ATTR_FLAGS	flags;
 	char		*p;
 
@@ -1607,7 +1327,7 @@ static int process_attribute(char const* fn, int const line,
 	/*
 	 *	Dictionaries need to have real names, not shitty ones.
 	 */
-	if (strncmp(argv[0], "Attr-", 5) == 0) {
+	if (strncmp(argv[1], "Attr-", 5) == 0) {
 		fr_strerror_printf("dict_init: %s[%d]: Invalid attribute name",
 				   fn, line);
 		return -1;
@@ -1618,23 +1338,26 @@ static int process_attribute(char const* fn, int const line,
 	/*
 	 *	Look for OIDs before doing anything else.
 	 */
-	if (strchr(argv[1], '.') != NULL) oid = 1;
+	p = strchr(argv[1], '.');
+	if (p) oid = 1;
 
-	{
+	/*
+	 *	Validate all entries
+	 */
+	if (!sscanf_i(argv[1], &value)) {
+		fr_strerror_printf("dict_init: %s[%d]: invalid value", fn, line);
+		return -1;
+	}
+
+	if (oid) {
 		DICT_ATTR const *da;
 
 		vendor = block_vendor;
 
-		if (!block_tlv) {
-			value = 0;
-		} else {
-			value = block_tlv->attr;
-		}
-
 		/*
-		 *	Parse OID.
+		 *	Parse the rest of the OID.
 		 */
-		if (dict_str2oid(argv[1], &value, &vendor, tlv_depth) < 0) {
+		if (dict_str2oid(p + 1, &value, &vendor, tlv_depth + 1) < 0) {
 			char buffer[256];
 
 			strlcpy(buffer, fr_strerror(), sizeof(buffer));
@@ -1644,21 +1367,19 @@ static int process_attribute(char const* fn, int const line,
 		}
 		block_vendor = vendor;
 
-		if (oid) {
-			/*
-			 *	Set the flags based on the parents flags.
-			 */
-			da = dict_parent(value, vendor);
-			if (!da) {
-				fr_strerror_printf("dict_init: %s[%d]: Parent attribute for %08x,%08x is undefined.", fn, line, value, vendor);
-				return -1;
-			}
-
-			flags.extended = da->flags.extended;
-			flags.long_extended = da->flags.long_extended;
-			flags.evs = da->flags.evs;
-			if (da->flags.has_tlv) flags.is_tlv = 1;
+		/*
+		 *	Set the flags based on the parents flags.
+		 */
+		da = dict_parent(value, vendor);
+		if (!da) {
+			fr_strerror_printf("dict_init: %s[%d]: Parent attribute is undefined.", fn, line);
+			return -1;
 		}
+
+		flags.extended = da->flags.extended;
+		flags.long_extended = da->flags.long_extended;
+		flags.evs = da->flags.evs;
+		if (da->flags.has_tlv) flags.is_tlv = 1;
 	}
 
 	if (strncmp(argv[2], "octets[", 7) != 0) {
@@ -1683,7 +1404,7 @@ static int process_attribute(char const* fn, int const line,
 
 		*p = 0;
 
-		if (!sscanf_i(argv[2] + 7, &length)) {
+		if (!sscanf_i(argv[1], &length)) {
 			fr_strerror_printf("dict_init: %s[%d]: invalid length", fn, line);
 			return -1;
 		}
@@ -1692,14 +1413,81 @@ static int process_attribute(char const* fn, int const line,
 			fr_strerror_printf("dict_init: %s[%d]: invalid length", fn, line);
 			return -1;
 		}
-
-		flags.length = length;
 	}
 
 	/*
-	 *	Parse options.
+	 *	Only look up the vendor if the string
+	 *	is non-empty.
 	 */
-	if (argc >= 4) {
+	if (argc < 4) {
+		/*
+		 *	Force "length" for data types of fixed length;
+		 */
+		switch (type) {
+		case PW_TYPE_BYTE:
+			length = 1;
+			break;
+
+		case PW_TYPE_SHORT:
+			length = 2;
+			break;
+
+		case PW_TYPE_DATE:
+		case PW_TYPE_IPV4_ADDR:
+		case PW_TYPE_INTEGER:
+		case PW_TYPE_SIGNED:
+			length = 4;
+			break;
+
+		case PW_TYPE_INTEGER64:
+			length = 8;
+			break;
+
+		case PW_TYPE_ETHERNET:
+			length = 6;
+			break;
+
+		case PW_TYPE_IFID:
+			length = 8;
+			break;
+
+		case PW_TYPE_IPV6_ADDR:
+			length = 16;
+			break;
+
+		case PW_TYPE_EXTENDED:
+			if ((vendor != 0) || (value < 241)) {
+				fr_strerror_printf("dict_init: %s[%d]: Attributes of type \"extended\" MUST be RFC attributes with value >= 241.", fn, line);
+				return -1;
+			}
+			flags.extended = 1;
+			break;
+
+		case PW_TYPE_LONG_EXTENDED:
+			if ((vendor != 0) || (value < 241)) {
+				fr_strerror_printf("dict_init: %s[%d]: Attributes of type \"long-extended\" MUST be RFC attributes with value >= 241.", fn, line);
+				return -1;
+			}
+			flags.extended = 1;
+			flags.long_extended = 1;
+			break;
+
+		case PW_TYPE_EVS:
+			flags.extended = 1;
+			flags.evs = 1;
+			if (value != PW_VENDOR_SPECIFIC) {
+				fr_strerror_printf("dict_init: %s[%d]: Attributes of type \"evs\" MUST have attribute code 26.", fn, line);
+				return -1;
+			}
+			break;
+
+		default:
+			break;
+		}
+
+		flags.length = length;
+
+	} else {		/* argc == 4: we have options */
 		char *key, *next, *last;
 
 		/*
@@ -1710,36 +1498,38 @@ static int process_attribute(char const* fn, int const line,
 			return -1;
 		}
 
+		if (length != 0) {
+			fr_strerror_printf("dict_init: %s[%d]: length cannot be used with options", fn, line);
+			return -1;
+		}
+
 		key = argv[3];
 		do {
 			next = strchr(key, ',');
 			if (next) *(next++) = '\0';
 
-			/*
-			 *	Boolean flag, means this is a tagged
-			 *	attribute.
-			 */
-			if ((strcmp(key, "has_tag") == 0) || (strcmp(key, "has_tag=1") == 0)) {
+			if (strcmp(key, "has_tag") == 0 ||
+			    strcmp(key, "has_tag=1") == 0) {
+				/* Boolean flag, means this is a
+				   tagged attribute */
 				flags.has_tag = 1;
 
-			/*
-			 *	Encryption method, defaults to 0 (none).
-			 *	Currently valid is just type 2,
-			 *	Tunnel-Password style, which can only
-			 *	be applied to strings.
-			 */
 			} else if (strncmp(key, "encrypt=", 8) == 0) {
+				/* Encryption method, defaults to 0 (none).
+				   Currently valid is just type 2,
+				   Tunnel-Password style, which can only
+				   be applied to strings. */
 				flags.encrypt = strtol(key + 8, &last, 0);
 				if (*last) {
-					fr_strerror_printf("dict_init: %s[%d] invalid option %s",
-							   fn, line, key);
+					fr_strerror_printf( "dict_init: %s[%d] invalid option %s",
+						    fn, line, key);
 					return -1;
 				}
 
 				if ((flags.encrypt == FLAG_ENCRYPT_ASCEND_SECRET) &&
 				    (type != PW_TYPE_STRING)) {
-					fr_strerror_printf("dict_init: %s[%d] Only \"string\" types can have the "
-							   "\"encrypt=3\" flag set", fn, line);
+					fr_strerror_printf( "dict_init: %s[%d] Only \"string\" types can have the \"encrypt=3\" flag set.",
+							    fn, line);
 					return -1;
 				}
 
@@ -1757,51 +1547,36 @@ static int process_attribute(char const* fn, int const line,
 					break;
 
 				default:
-					fr_strerror_printf("dict_init: %s[%d] \"%s\" type cannot have the "
+					fr_strerror_printf( "dict_init: %s[%d] \"%s\" type cannot have the "
 							   "\"array\" flag set",
 							   fn, line,
 							   fr_int2str(dict_attr_types, type, "<UNKNOWN>"));
 					return -1;
 				}
 
-			} else if (strncmp(key, "concat", 7) == 0) {
+			} else if (strncmp(key, "concat", 6) == 0) {
 				flags.concat = 1;
 
 				if (type != PW_TYPE_OCTETS) {
-					fr_strerror_printf("dict_init: %s[%d] Only \"octets\" type can have the "
-							   "\"concat\" flag set", fn, line);
-					return -1;
+						fr_strerror_printf( "dict_init: %s[%d] Only \"octets\" type can have the \"concat\" flag set.",
+							    fn, line);
+						return -1;
 				}
 
-			} else if (strncmp(key, "virtual", 8) == 0) {
-				flags.virtual = 1;
-
-				if (vendor != 0) {
-					fr_strerror_printf("dict_init: %s[%d] VSAs cannot have the \"virtual\" "
-							   "flag set", fn, line);
-					return -1;
-				}
-
-				if (value < 256) {
-					fr_strerror_printf("dict_init: %s[%d] Standard attributes cannot "
-							   "have the \"virtual\" flag set", fn, line);
-					return -1;
-				}
-
-			/*
-			 *	The only thing is the vendor name,
-			 *	and it's a known name: allow it.
-			 */
+				/*
+				 *	The only thing is the vendor name,
+				 *	and it's a known name: allow it.
+				 */
 			} else if ((key == argv[3]) && !next) {
 				if (oid) {
-					fr_strerror_printf("dict_init: %s[%d] New-style attributes cannot use "
-							   "a vendor flag", fn, line);
+					fr_strerror_printf( "dict_init: %s[%d] New-style attributes cannot use a vendor flag.",
+							    fn, line);
 					return -1;
 				}
 
 				if (block_vendor) {
-					fr_strerror_printf("dict_init: %s[%d] Vendor flag inside of \"BEGIN-VENDOR\" "
-							   "is not allowed", fn, line);
+					fr_strerror_printf( "dict_init: %s[%d] Vendor flag inside of \"BEGIN-VENDOR\" is not allowed.",
+							    fn, line);
 					return -1;
 				}
 
@@ -1811,7 +1586,8 @@ static int process_attribute(char const* fn, int const line,
 
 			} else {
 			unknown:
-				fr_strerror_printf("dict_init: %s[%d]: unknown option \"%s\"", fn, line, key);
+				fr_strerror_printf( "dict_init: %s[%d]: unknown option \"%s\"",
+					    fn, line, key);
 				return -1;
 			}
 
@@ -1873,7 +1649,7 @@ static int process_attribute(char const* fn, int const line,
 		}
 
 		/*
-		 *	Shift the value left.
+		 *
 		 */
 		value <<= fr_attr_shift[tlv_depth];
 		value |= block_tlv->attr;
@@ -2022,74 +1798,6 @@ static int process_value_alias(char const* fn, int const line, char **argv,
 }
 
 
-static int parse_format(char const *fn, int line, char const *format, int *pvalue, int *ptype, int *plength, bool *pcontinuation)
-{
-	char const *p;
-	int type, length;
-	bool continuation = false;
-
-	if (strncasecmp(format, "format=", 7) != 0) {
-		fr_strerror_printf("dict_init: %s[%d]: Invalid format for VENDOR.  Expected \"format=\", got \"%s\"",
-				   fn, line, format);
-		return -1;
-	}
-
-	p = format + 7;
-	if ((strlen(p) < 3) ||
-	    !isdigit((int) p[0]) ||
-	    (p[1] != ',') ||
-	    !isdigit((int) p[2]) ||
-	    (p[3] && (p[3] != ','))) {
-		fr_strerror_printf("dict_init: %s[%d]: Invalid format for VENDOR.  Expected text like \"1,1\", got \"%s\"",
-				   fn, line, p);
-		return -1;
-	}
-
-	type = (int) (p[0] - '0');
-	length = (int) (p[2] - '0');
-
-	if ((type != 1) && (type != 2) && (type != 4)) {
-		fr_strerror_printf("dict_init: %s[%d]: invalid type value %d for VENDOR",
-				   fn, line, type);
-		return -1;
-	}
-
-	if ((length != 0) && (length != 1) && (length != 2)) {
-		fr_strerror_printf("dict_init: %s[%d]: invalid length value %d for VENDOR",
-				   fn, line, length);
-		return -1;
-	}
-
-	if (p[3] == ',') {
-		if (!p[4]) {
-			fr_strerror_printf("dict_init: %s[%d]: Invalid format for VENDOR.  Expected text like \"1,1\", got \"%s\"",
-					   fn, line, p);
-			return -1;
-		}
-
-		if ((p[4] != 'c') ||
-		    (p[5] != '\0')) {
-			fr_strerror_printf("dict_init: %s[%d]: Invalid format for VENDOR.  Expected text like \"1,1\", got \"%s\"",
-					   fn, line, p);
-			return -1;
-		}
-		continuation = true;
-
-		if ((*pvalue != VENDORPEC_WIMAX) ||
-		    (type != 1) || (length != 1)) {
-			fr_strerror_printf("dict_init: %s[%d]: Only WiMAX VSAs can have continuations",
-					   fn, line);
-			return -1;
-		}
-	}
-
-	*ptype = type;
-	*plength = length;
-	*pcontinuation = continuation;
-	return 0;
-}
-
-
 /*
  *	Process the VENDOR command
  */
@@ -2097,9 +1805,8 @@ static int process_vendor(char const* fn, int const line, char **argv,
 			  int argc)
 {
 	int		value;
-	int		type, length;
 	bool		continuation = false;
-	DICT_VENDOR	*dv;
+	char const	*format = NULL;
 
 	if ((argc < 2) || (argc > 3)) {
 		fr_strerror_printf( "dict_init: %s[%d] invalid VENDOR entry",
@@ -2129,39 +1836,93 @@ static int process_vendor(char const* fn, int const line, char **argv,
 	}
 
 	/*
-	 *	Look for a format statement.  Allow it to over-ride the hard-coded formats below.
+	 *	Look for a format statement
 	 */
 	if (argc == 3) {
-		if (parse_format(fn, line, argv[2], &value, &type, &length, &continuation) < 0) {
+		format = argv[2];
+
+	} else if (value == VENDORPEC_USR) { /* catch dictionary screw-ups */
+		format = "format=4,0";
+
+	} else if (value == VENDORPEC_LUCENT) {
+		format = "format=2,1";
+
+	} else if (value == VENDORPEC_STARENT) {
+		format = "format=2,2";
+
+	} /* else no fixups to do */
+
+	if (format) {
+		int type, length;
+		char const *p;
+		DICT_VENDOR *dv;
+
+		if (strncasecmp(format, "format=", 7) != 0) {
+			fr_strerror_printf("dict_init: %s[%d]: Invalid format for VENDOR.  Expected \"format=\", got \"%s\"",
+				   fn, line, format);
 			return -1;
 		}
 
-	} else if (value == VENDORPEC_USR) { /* catch dictionary screw-ups */
-		type = 4;
-		length = 0;
+		p = format + 7;
+		if ((strlen(p) < 3) ||
+		    !isdigit((int) p[0]) ||
+		    (p[1] != ',') ||
+		    !isdigit((int) p[2]) ||
+		    (p[3] && (p[3] != ','))) {
+			fr_strerror_printf("dict_init: %s[%d]: Invalid format for VENDOR.  Expected text like \"1,1\", got \"%s\"",
+				   fn, line, p);
+			return -1;
+		}
 
-	} else if (value == VENDORPEC_LUCENT) {
-		type = 2;
-		length = 1;
+		type = (int) (p[0] - '0');
+		length = (int) (p[2] - '0');
 
-	} else if (value == VENDORPEC_STARENT) {
-		type = 2;
-		length = 2;
+		if (p[3] == ',') {
+			if (!p[4]) {
+				fr_strerror_printf("dict_init: %s[%d]: Invalid format for VENDOR.  Expected text like \"1,1\", got \"%s\"",
+				   fn, line, p);
+				return -1;
+			}
 
-	} else {
-		type = length = 1;
-	}
+			if ((p[4] != 'c') ||
+			    (p[5] != '\0')) {
+				fr_strerror_printf("dict_init: %s[%d]: Invalid format for VENDOR.  Expected text like \"1,1\", got \"%s\"",
+					   fn, line, p);
+				return -1;
+			}
+			continuation = true;
 
-	dv = dict_vendorbyvalue(value);
-	if (!dv) {
-		fr_strerror_printf("dict_init: %s[%d]: Failed adding format for VENDOR",
+			if ((value != VENDORPEC_WIMAX) ||
+			    (type != 1) || (length != 1)) {
+				fr_strerror_printf("dict_init: %s[%d]: Only WiMAX VSAs can have continuations",
+					   fn, line);
+				return -1;
+			}
+		}
+
+		dv = dict_vendorbyvalue(value);
+		if (!dv) {
+			fr_strerror_printf("dict_init: %s[%d]: Failed adding format for VENDOR",
 				   fn, line);
-		return -1;
-	}
+			return -1;
+		}
 
-	dv->type = type;
-	dv->length = length;
-	dv->flags = continuation;
+		if ((type != 1) && (type != 2) && (type != 4)) {
+			fr_strerror_printf("dict_init: %s[%d]: invalid type value %d for VENDOR",
+				   fn, line, type);
+			return -1;
+		}
+
+		if ((length != 0) && (length != 1) && (length != 2)) {
+			fr_strerror_printf("dict_init: %s[%d]: invalid length value %d for VENDOR",
+				   fn, line, length);
+			return -1;
+		}
+
+		dv->type = type;
+		dv->length = length;
+		dv->flags = continuation;
+	}
 
 	return 0;
 }
@@ -2565,7 +2326,7 @@ static int my_dict_init(char const *parent, char const *filename,
 				 *	attribute into the upper 8
 				 *	bits of the vendor ID
 				 */
-				block_vendor |= da->vendor;
+				block_vendor |= (da->attr & fr_attr_mask[0]) * FR_MAX_VENDOR;
 			}
 
 			continue;
@@ -2790,17 +2551,16 @@ static size_t print_attr_oid(char *buffer, size_t size, unsigned int attr,
 	size_t len;
 
 	switch (dv_type) {
-	default:
-	case 1:
-		len = snprintf(buffer, size, "%u", attr & 0xff);
-		break;
-
 	case 4:
 		return snprintf(buffer, size, "%u", attr);
 
 	case 2:
 		return snprintf(buffer, size, "%u", attr & 0xffff);
 
+	default:
+	case 1:
+		len = snprintf(buffer, size, "%u", attr & 0xff);
+		break;
 	}
 
 	if ((attr >> 8) == 0) return len;
@@ -2842,36 +2602,79 @@ void dict_attr_free(DICT_ATTR const **da)
 	}
 
 	memcpy(&tmp, &da, sizeof(*tmp));
-	talloc_free(*tmp);
+	free(*tmp);
 
 	*tmp = NULL;
 }
 
+/** Copies a dictionary attr
+ *
+ * If the attr is dynamically allocated (unknown attribute), then it will be
+ * copied to a new attr.
+ *
+ * If the attr is known, a pointer to the da will be returned.
+ *
+ * @param da to copy.
+ * @param vp_free if true, da will be freed at the same time as the
+ *	VALUE_PAIR which contains it.
+ * @return return a copy of the da.
+ */
+DICT_ATTR const *dict_attr_copy(DICT_ATTR const *da, int vp_free)
+{
+	DICT_ATTR *copy;
 
-/** Initialises a dictionary attr for unknown attributes
+	if (!da) return NULL;
+
+	if (!da->flags.is_unknown) {
+		return da;
+	}
+
+	copy = malloc(DICT_ATTR_SIZE);
+	if (!copy) {
+		fr_strerror_printf("Out of memory");
+		return NULL;
+	}
+
+	memcpy(copy, da, DICT_ATTR_SIZE);
+	copy->flags.vp_free = (vp_free != 0);
+
+	return copy;
+}
+
+
+/** Allocs an dictionary attr for unknown attributes
  *
- * Initialises a dict attr for an unknown attribute/vendor/type without adding
- * it to dictionary pools/hashes.
+ * Allocates a dict attr for an unknown attribute/vendor/type
+ * without adding it to dictionary pools/hashes.
  *
- * @param[in,out] da struct to initialise, must be at least DICT_ATTR_SIZE bytes.
+ * @note Must be freed with dict_attr_free if not used as part of a valuepair.
+ *
  * @param[in] attr number.
  * @param[in] vendor number.
- * @return 0 on success.
+ * @param[in] vp_free if > 0 DICT_ATTR will be freed on VALUE_PAIR free.
+ * @return new dictionary attribute.
  */
-int dict_unknown_from_fields(DICT_ATTR *da, unsigned int attr, unsigned int vendor)
+DICT_ATTR const *dict_attrunknown(unsigned int attr, unsigned int vendor,
+				  int vp_free)
 {
+	DICT_ATTR *da;
 	char *p;
 	int dv_type = 1;
 	size_t len = 0;
 	size_t bufsize = DICT_ATTR_MAX_NAME_LEN;
 
+	da = malloc(DICT_ATTR_SIZE);
+	if (!da) {
+		fr_strerror_printf("Out of memory");
+		return NULL;
+	}
 	memset(da, 0, DICT_ATTR_SIZE);
 
 	da->attr = attr;
 	da->vendor = vendor;
 	da->type = PW_TYPE_OCTETS;
 	da->flags.is_unknown = true;
-	da->flags.is_pointer = true;
+	da->flags.vp_free = (vp_free != 0);
 
 	/*
 	 *	Unknown attributes of the "WiMAX" vendor get marked up
@@ -2914,37 +2717,6 @@ int dict_unknown_from_fields(DICT_ATTR *da, unsigned int attr, unsigned int vend
 
 	print_attr_oid(p, bufsize , attr, dv_type);
 
-	return 0;
-}
-
-/** Allocs a dictionary attr for unknown attributes
- *
- * Allocs a dict attr for an unknown attribute/vendor/type without adding
- * it to dictionary pools/hashes.
- *
- * @param[in] ctx to allocate DA in.
- * @param[in] attr number.
- * @param[in] vendor number.
- * @return 0 on success.
- */
-DICT_ATTR const *dict_unknown_afrom_fields(TALLOC_CTX *ctx, unsigned int attr, unsigned int vendor)
-{
-	uint8_t *p;
-	DICT_ATTR *da;
-
-	p = talloc_zero_array(ctx, uint8_t, DICT_ATTR_SIZE);
-	if (!p) {
-		fr_strerror_printf("Out of memory");
-		return NULL;
-	}
-	da = (DICT_ATTR *) p;
-	talloc_set_type(da, DICT_ATTR);
-
-	if (dict_unknown_from_fields(da, attr, vendor) < 0) {
-		talloc_free(p);
-		return NULL;
-	}
-
 	return da;
 }
 
@@ -2956,18 +2728,24 @@ DICT_ATTR const *dict_unknown_afrom_fields(TALLOC_CTX *ctx, unsigned int attr, u
  *  - Vendor-%d-Attr-%d
  *  - VendorName-Attr-%d
  *
- * @param[in] da to initialise.
- * @param[in] name of attribute.
- * @return 0 on success -1 on failure.
+ * @todo should check attr/vendor against dictionary and return the real da.
+ *
+ * @param[in] attribute name.
+ * @param[in] vp_free if > 0 DICT_ATTR will be freed on VALUE_PAIR free.
+ * @return new da or NULL on error.
  */
-int dict_unknown_from_str(DICT_ATTR *da, char const *name)
+DICT_ATTR const *dict_attrunknownbyname(char const *attribute, int vp_free)
 {
-	unsigned int   	attr = 0, vendor = 0;
+	unsigned int   	attr, vendor = 0;
+	unsigned int    dv_type = 1;	/* The type of vendor field */
 
-	char const	*p = name;
+	char const	*p = attribute;
 	char		*q;
 
-	if (dict_valid_name(name) < 0) return -1;
+	DICT_VENDOR	*dv;
+	DICT_ATTR const	*da;
+
+	if (dict_valid_name(attribute) < 0) return NULL;
 
 	/*
 	 *	Pull off vendor prefix first.
@@ -2976,9 +2754,10 @@ int dict_unknown_from_str(DICT_ATTR *da, char const *name)
 		if (strncasecmp(p, "Vendor-", 7) == 0) {
 			vendor = (int) strtol(p + 7, &q, 10);
 			if ((vendor == 0) || (vendor > FR_MAX_VENDOR)) {
-				fr_strerror_printf("Invalid vendor value in attribute name \"%s\"", name);
-
-				return -1;
+				fr_strerror_printf("Invalid vendor value in "
+						   "attribute name \"%s\"",
+						   attribute);
+				return NULL;
 			}
 
 			p = q;
@@ -2990,14 +2769,17 @@ int dict_unknown_from_str(DICT_ATTR *da, char const *name)
 			q = strchr(p, '-');
 
 			if (!q) {
-				fr_strerror_printf("Invalid vendor name in attribute name \"%s\"", name);
-				return -1;
+				fr_strerror_printf("Invalid vendor name in "
+						   "attribute name \"%s\"",
+						   attribute);
+				return NULL;
 			}
 
 			if ((size_t) (q - p) >= sizeof(buffer)) {
-				fr_strerror_printf("Vendor name too long in attribute name \"%s\"", name);
-
-				return -1;
+				fr_strerror_printf("Vendor name too long "
+						   "in attribute name \"%s\"",
+						   attribute);
+				return NULL;
 			}
 
 			memcpy(buffer, p, (q - p));
@@ -3005,18 +2787,19 @@ int dict_unknown_from_str(DICT_ATTR *da, char const *name)
 
 			vendor = dict_vendorbyname(buffer);
 			if (!vendor) {
-				fr_strerror_printf("Unknown name \"%s\"", name);
-
-				return -1;
+				fr_strerror_printf("Unknown attribute \"%s\"",
+						   attribute);
+				return NULL;
 			}
 
 			p = q;
 		}
 
 		if (*p != '-') {
-			fr_strerror_printf("Invalid text following vendor definition in attribute name \"%s\"", name);
-
-			return -1;
+			fr_strerror_printf("Invalid text following vendor "
+					   "definition in attribute name "
+					   "\"%s\"", attribute);
+			return NULL;
 		}
 		p++;
 	}
@@ -3025,98 +2808,128 @@ int dict_unknown_from_str(DICT_ATTR *da, char const *name)
 	 *	Attr-%d
 	 */
 	if (strncasecmp(p, "Attr-", 5) != 0) {
-		fr_strerror_printf("Unknown attribute \"%s\"", name);
-
-		return -1;
-	}
-
-	/*
-	 *	Parse the OID, with a (possibly) pre-defined vendor.
-	 */
-	if (dict_str2oid(p + 5, &attr, &vendor, 0) < 0) {
-		return -1;
-	}
-
-	return dict_unknown_from_fields(da, attr, vendor);
-}
-
-/** Create a DICT_ATTR from an ASCII attribute and value
- *
- * Where the attribute name is in the form:
- *  - Attr-%d
- *  - Attr-%d.%d.%d...
- *  - Vendor-%d-Attr-%d
- *  - VendorName-Attr-%d
- *
- * @param[in] ctx to alloc new attribute in.
- * @param[in] name of attribute.
- * @return 0 on success -1 on failure.
- */
-DICT_ATTR const *dict_unknown_afrom_str(TALLOC_CTX *ctx, char const *name)
-{
-	uint8_t *p;
-	DICT_ATTR *da;
-
-	p = talloc_zero_array(ctx, uint8_t, DICT_ATTR_SIZE);
-	if (!p) {
-		fr_strerror_printf("Out of memory");
-		return NULL;
-	}
-	da = (DICT_ATTR *) p;
-	talloc_set_type(da, DICT_ATTR);
-
-	if (dict_unknown_from_str(da, name) < 0) {
-		talloc_free(p);
+		fr_strerror_printf("Unknown attribute \"%s\"",
+				   attribute);
 		return NULL;
 	}
 
-	return da;
-}
-
-/** Create a dictionary attribute by name embedded in another string
- *
- * Find the first invalid attribute name char in the string pointed
- * to by name.
- *
- * Copy the characters between the start of the name string and the first
- * none dict_attr_allowed_char to a buffer and initialise da as an
- * unknown attribute.
- *
- * @param[out] da to initialise.
- * @param[in,out] name string start.
- * @return 0 on success or -1 on error;
- */
-int dict_unknown_from_substr(DICT_ATTR *da, char const **name)
-{
-	char const *p;
-	size_t len;
-	char buffer[DICT_ATTR_MAX_NAME_LEN + 1];
-
-	if (!name || !*name) return -1;
+	attr = strtol(p + 5, &q, 10);
 
 	/*
-	 *	Advance p until we get something that's not part of
-	 *	the dictionary attribute name.
+	 *	Invalid attribute.
 	 */
-	for (p = *name; dict_attr_allowed_chars[(int) *p] || (*p == '.' ) || (*p == '-'); p++);
-
-	len = p - *name;
-	if (len > DICT_ATTR_MAX_NAME_LEN) {
-		fr_strerror_printf("Attribute name too long");
-
-		return -1;
+	if (attr == 0) {
+		fr_strerror_printf("Invalid value in attribute name \"%s\"",
+				   attribute);
+		return NULL;
 	}
-	if (len == 0) {
-		fr_strerror_printf("Invalid attribute name");
-		return -1;
+
+	p = q;
+
+	/*
+	 *	Vendor-%d-Attr-%d
+	 *	VendorName-Attr-%d
+	 *	Attr-%d
+	 *	Attr-%d.
+	 *
+	 *	Anything else is invalid.
+	 */
+	if (((vendor != 0) && (*p != '\0')) ||
+	    ((vendor == 0) && *p && (*p != '.'))) {
+	invalid:
+		fr_strerror_printf("Invalid OID");
+		return NULL;
 	}
-	strlcpy(buffer, *name, len + 1);
 
-	if (dict_unknown_from_str(da, buffer) < 0) return -1;
+	/*
+	 *	Look for OIDs.  Require the "Attr-26.Vendor-Id.type"
+	 *	format, and disallow "Vendor-%d-Attr-%d" and
+	 *	"VendorName-Attr-%d"
+	 *
+	 *	This section parses the Vendor-Id portion of
+	 *	Attr-%d.%d.  where the first number is 26, *or* an
+	 *	extended attribute of the "evs" data type.
+	 */
+	if (*p == '.') {
+		da = dict_attrbyvalue(attr, 0);
+		if (!da) {
+			fr_strerror_printf("Cannot parse attributes without "
+					   "dictionaries");
+			return NULL;
+		}
 
-	*name = p;
+		if ((attr != PW_VENDOR_SPECIFIC) &&
+		    !(da->flags.extended || da->flags.long_extended)) {
+			fr_strerror_printf("Standard attributes cannot use "
+					   "OIDs");
+			return NULL;
+		}
 
-	return 0;
+		if ((attr == PW_VENDOR_SPECIFIC) || da->flags.evs) {
+			vendor = strtol(p + 1, &q, 10);
+			if ((vendor == 0) || (vendor > FR_MAX_VENDOR)) {
+				fr_strerror_printf("Invalid vendor");
+				return NULL;
+			}
+
+			if (*q != '.') goto invalid;
+
+			p = q;
+
+			if (da->flags.evs) {
+				vendor |= attr * FR_MAX_VENDOR;
+			}
+			attr = 0;
+		} /* else the second number is a TLV number */
+	}
+
+	/*
+	 *	Get the expected maximum size of the attribute.
+	 */
+	if (vendor) {
+		dv = dict_vendorbyvalue(vendor & (FR_MAX_VENDOR - 1));
+		if (dv) {
+			dv_type = dv->type;
+			if (dv_type > 3) dv_type = 3; /* hack */
+		}
+	}
+
+	/*
+	 *	Parse the next number.  It could be a Vendor-Type
+	 *	of 1..2^24, or it could be a TLV.
+	 */
+	if (*p == '.') {
+		attr = strtol(p + 1, &q, 10);
+		if (attr == 0) {
+			fr_strerror_printf("Invalid attribute number");
+			return NULL;
+		}
+
+		if (*q) {
+			if (*q != '.') {
+				goto invalid;
+			}
+
+			if (dv_type != 1) {
+				goto invalid;
+			}
+		}
+
+		p = q;
+	}
+
+	/*
+	 *	Enforce a maximum value on the attribute number.
+	 */
+	if (attr >= (unsigned) (1 << (dv_type << 3))) goto invalid;
+
+	if (*p == '.') {
+		if (dict_str2oid(p + 1, &attr, &vendor, 1) < 0) {
+			return NULL;
+		}
+	}
+
+	return dict_attrunknown(attr, vendor, vp_free);
 }
 
 /*
@@ -3135,9 +2948,10 @@ DICT_ATTR const *dict_attrbyvalue(unsigned int attr, unsigned int vendor)
 }
 
 
-/** Get an attribute by its numerical value and data type
+/**
+ * @brief Get an attribute by its numerical value. and data type
  *
- * Used only for COMBO_IP
+ *	Used only for COMBO_IP
  *
  * @return The attribute, or NULL if not found
  */
@@ -3153,8 +2967,8 @@ DICT_ATTR const *dict_attrbytype(unsigned int attr, unsigned int vendor,
 	return fr_hash_table_finddata(attributes_combo, &da);
 }
 
-/** Using a parent and attr/vendor, find a child attr/vendor
- *
+/**
+ * @brief Using a parent and attr/vendor, find a child attr/vendor
  */
 int dict_attr_child(DICT_ATTR const *parent,
 		    unsigned int *pattr, unsigned int *pvendor)
@@ -3272,58 +3086,39 @@ DICT_ATTR const *dict_attrbyname(char const *name)
 	return fr_hash_table_finddata(attributes_byname, da);
 }
 
-/** Look up a dictionary attribute by name embedded in another string
- *
- * Find the first invalid attribute name char in the string pointed
- * to by name.
- *
- * Copy the characters between the start of the name string and the first
- * none dict_attr_allowed_char to a buffer and perform a dictionary lookup
- * using that value.
- *
- * If the attribute exists, advance the pointer pointed to by name
- * to the first none dict_attr_allowed_char char, and return the DA.
- *
- * If the attribute does not exist, don't advance the pointer and return
- * NULL.
- *
- * @param[in,out] name string start.
- * @return NULL if no attributes matching the name could be found, else
+/*
+ *	Get an attribute by its name, where the name might have a tag
+ *	or something else after it.
  */
-DICT_ATTR const *dict_attrbyname_substr(char const **name)
+DICT_ATTR const *dict_attrbytagged_name(char const *name)
 {
-	DICT_ATTR *find;
-	DICT_ATTR const *da;
-	char const *p;
-	size_t len;
-	uint32_t buffer[(sizeof(*find) + DICT_ATTR_MAX_NAME_LEN + 3)/4];
+	DICT_ATTR *da;
+	char *p;
+	uint32_t buffer[(sizeof(*da) + DICT_ATTR_MAX_NAME_LEN + 3)/4];
 
-	if (!name || !*name) return NULL;
+	if (!name) return NULL;
 
-	find = (DICT_ATTR *) buffer;
+	da = (DICT_ATTR *) buffer;
+	strlcpy(da->name, name, DICT_ATTR_MAX_NAME_LEN + 1);
 
 	/*
-	 *	Advance p until we get something that's not part of
-	 *	the dictionary attribute name.
+	 *	The name might have a tag or array reference.  That
+	 *	isn't properly part of the name, and can be ignored on
+	 *	lookup.
 	 */
-	for (p = *name; dict_attr_allowed_chars[(int) *p]; p++);
+	for (p = &da->name[0]; *p; p++) {
+		if (*p == ':') {
+			*p = '\0';
+			break;
+		}
 
-	len = p - *name;
-	if (len > DICT_ATTR_MAX_NAME_LEN) {
-		fr_strerror_printf("Attribute name too long");
-
-		return NULL;
+		if (*p == '[') {
+			*p = '\0';
+			break;
+		}
 	}
-	strlcpy(find->name, *name, len + 1);
 
-	da = fr_hash_table_finddata(attributes_byname, find);
-	if (!da) {
-		fr_strerror_printf("Unknown attribute \"%s\"", find->name);
-		return NULL;
-	}
-	*name = p;
-
-	return da;
+	return fr_hash_table_finddata(attributes_byname, da);
 }
 
 /*
@@ -3423,43 +3218,4 @@ DICT_VENDOR *dict_vendorbyvalue(int vendorpec)
 	dv.vendorpec = vendorpec;
 
 	return fr_hash_table_finddata(vendors_byvalue, &dv);
-}
-
-/** Converts an unknown to a known by adding it to the internal dictionaries.
- *
- * Does not free old DICT_ATTR, that is left up to the caller.
- *
- * @param old unknown attribute to add.
- * @return existing DICT_ATTR if old was found in a dictionary, else the new entry in the dictionary
- * 	   representing old.
- */
-DICT_ATTR const *dict_unknown_add(DICT_ATTR const *old)
-{
-	DICT_ATTR const *da, *parent;
-	ATTR_FLAGS flags;
-
-	if (!old) return NULL;
-
-	if (!old->flags.is_unknown) return old;
-
-	da = dict_attrbyvalue(old->attr, old->vendor);
-	if (da) return da;
-
-	memcpy(&flags, &old->flags, sizeof(flags));
-	flags.is_unknown = false;
-
-	parent = dict_parent(old->attr, old->vendor);
-	if (parent) {
-		if (parent->flags.has_tlv) flags.is_tlv = true;
-		flags.evs = parent->flags.evs;
-		flags.extended = parent->flags.extended;
-		flags.long_extended = parent->flags.long_extended;
-	}
-
-	if (dict_addattr(old->name, old->attr, old->vendor, old->type, flags) < 0) {
-		return NULL;
-	}
-
-	da = dict_attrbyvalue(old->attr, old->vendor);
-	return da;
 }

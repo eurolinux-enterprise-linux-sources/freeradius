@@ -97,8 +97,6 @@ void rbtree_free(rbtree_t *tree)
 #endif
 	tree->root = NULL;
 
-	PTHREAD_MUTEX_UNLOCK(tree);
-
 #ifdef HAVE_PTHREAD_H
 	if (tree->lock) pthread_mutex_destroy(&tree->mutex);
 #endif

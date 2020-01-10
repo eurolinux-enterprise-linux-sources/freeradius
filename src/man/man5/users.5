@@ -28,7 +28,7 @@ empty) list of check items, all on one line.  The next line begins
 with a tab, and a (possibly empty) list of reply items.  Each item in
 the check or reply item list is an attribute of the form \fBname =
 value\fP.  Multiple items may be placed on one line, in which case
-they must be separated by commas.  The reply items may be specified
+they must be seperated by commas.  The reply items may be specified
 over multiple lines, in which case each line must end with a comma,
 and the last line of the reply items must not end with a comma.
 
@@ -42,7 +42,7 @@ If the incoming request matches NO entry, then the request is
 rejected.
 
 .SH CAVEATS
-The special keyword \fBDEFAULT\fP matches any usernames.
+The special username \fBDEFAULT\fP matches any usernames.
 
 The entries are processed in order, from the top of the \fBusers\fP file,
 on down.  If an entry contains the special item \fBFall-Through =
@@ -143,6 +143,22 @@ a value less than, or equal to the one given.
 Not allowed as a reply item.
 
 .TP 0.5i
+.B "Attribute =~ Expression"
+As a check item, it matches if the request contains an attribute which
+matches the given regular expression.  This operator may only be
+applied to string attributes.
+.br
+Not allowed as a reply item.
+
+.TP 0.5i
+.B "Attribute !~ Expression"
+As a check item, it matches if the request contains an attribute which
+does not match the given regular expression.  This operator may only be
+applied to string attributes.
+.br
+Not allowed as a reply item.
+
+.TP 0.5i
 .B "Attribute =* Value"
 As a check item, it matches if the request contains the named
 attribute, no matter what the value is.
@@ -166,6 +182,18 @@ bob	Cleartext-Password := "hello"
 Requests containing the User-Name attribute, with value "bob", will be
 authenticated using the "known good" password "hello".  There are no
 reply items, so the reply will be empty.
+.RE
+
+.DS
+DEFAULT	Auth-Type = System
+.br
+	Fall-Through = Yes
+
+.DE
+.RS
+For all users reaching this entry, perform authentication against the
+system, unless Auth-Type has already been set.  Also, process any
+following entries which may match.
 .RE
 
 .DS
@@ -215,6 +243,7 @@ entries that set reply attributes.
 .BR radclient (1),
 .BR radiusd (8),
 .BR dictionary (5),
+.BR naslist (5)
 
 .SH AUTHOR
 The FreeRADIUS team.

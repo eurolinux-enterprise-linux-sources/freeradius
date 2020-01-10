@@ -1,8 +1,7 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version.
+ *   it under the terms of the GNU General Public License, version 2 if the
+ *   License as published by the Free Software Foundation.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -43,7 +42,8 @@ static CONF_PARSER tls_config[] = {
 	{ "random_file", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, tls_random_file), NULL },
 	{ "check_cert", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_rest_section_t, tls_check_cert), "yes" },
 	{ "check_cert_cn", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_rest_section_t, tls_check_cert_cn), "yes" },
-	CONF_PARSER_TERMINATOR
+
+	{ NULL, -1, 0, NULL, NULL }
 };
 
 /*
@@ -56,31 +56,31 @@ static CONF_PARSER tls_config[] = {
  *	buffer over-flows.
  */
 static const CONF_PARSER section_config[] = {
-	{ "uri", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_rest_section_t, uri), ""   },
+	{ "uri", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, uri), ""   },
 	{ "method", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, method_str), "GET" },
 	{ "body", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, body_str), "none" },
-	{ "data", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_rest_section_t, data), NULL },
-	{ "force_to", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, force_to_str), NULL },
+	{ "data", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, data), NULL },
 
 	/* User authentication */
 	{ "auth", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, auth_str), "none" },
-	{ "username", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_rest_section_t, username), NULL },
-	{ "password", FR_CONF_OFFSET(PW_TYPE_STRING | PW_TYPE_XLAT, rlm_rest_section_t, password), NULL },
+	{ "username", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, username), NULL },
+	{ "password", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_section_t, password), NULL },
 	{ "require_auth", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_rest_section_t, require_auth), "no" },
 
 	/* Transfer configuration */
-	{ "timeout", FR_CONF_OFFSET(PW_TYPE_TIMEVAL, rlm_rest_section_t, timeout_tv), "4.0" },
+	{ "timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_rest_section_t, timeout), "4" },
 	{ "chunk", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_rest_section_t, chunk), "0" },
 
 	/* TLS Parameters */
 	{ "tls", FR_CONF_POINTER(PW_TYPE_SUBSECTION, NULL), (void const *) tls_config },
-	CONF_PARSER_TERMINATOR
+
+	{ NULL, -1, 0, NULL, NULL }
 };
 
 static const CONF_PARSER module_config[] = {
 	{ "connect_uri", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_rest_t, connect_uri), NULL },
-	{ "connect_timeout", FR_CONF_OFFSET(PW_TYPE_TIMEVAL, rlm_rest_t, connect_timeout_tv), "4.0" },
-	CONF_PARSER_TERMINATOR
+
+	{ NULL, -1, 0, NULL, NULL }
 };
 
 static int rlm_rest_perform(rlm_rest_t *instance, rlm_rest_section_t *section, void *handle, REQUEST *request,
@@ -124,83 +124,8 @@ static int rlm_rest_perform(rlm_rest_t *instance, rlm_rest_section_t *section, v
 static void rlm_rest_cleanup(rlm_rest_t *instance, rlm_rest_section_t *section, void *handle)
 {
 	rest_request_cleanup(instance, section, handle);
-}
+};
 
-static ssize_t jsonquote_xlat(UNUSED void *instance, UNUSED REQUEST *request,
-			      char const *fmt, char *out, size_t outlen)
-{
-	char const *p;
-	size_t freespace = outlen;
-	size_t len;
-
-	for (p = fmt; *p != '\0'; p++) {
-		/* Indicate truncation */
-		if (freespace < 3) {
-			*out = '\0';
-			return outlen + 1;
-		}
-
-		if (*p == '"') {
-			*out++ = '\\';
-			*out++ = '"';
-			freespace -= 2;
-		} else if (*p == '\\') {
-			*out++ = '\\';
-			*out++ = '\\';
-			freespace -= 2;
-		} else if (*p == '/') {
-			*out++ = '\\';
-			*out++ = '/';
-			freespace -= 2;
-		} else if (*p >= ' ') {
-			*out++ = *p;
-			freespace--;
-		/*
-		 *	Unprintable chars
-		 */
-		} else {
-			*out++ = '\\';
-			freespace--;
-
-			switch (*p) {
-			case '\b':
-				*out++ = 'b';
-				freespace--;
-				break;
-
-			case '\f':
-				*out++ = 'f';
-				freespace--;
-				break;
-
-			case '\n':
-				*out++ = 'n';
-				freespace--;
-				break;
-
-			case '\r':
-				*out++ = 'r';
-				freespace--;
-				break;
-
-			case '\t':
-				*out++ = 't';
-				freespace--;
-				break;
-
-			default:
-				len = snprintf(out, freespace, "u%04X", (uint8_t) *p);
-				if (is_truncated(len, freespace)) return (outlen - freespace) + len;
-				out += len;
-				freespace -= len;
-			}
-		}
-	}
-
-	*out = '\0';
-
-	return outlen - freespace;
-}
 /*
  *	Simple xlat to read text data from a URL
  */
@@ -224,6 +149,7 @@ static ssize_t rest_xlat(void *instance, REQUEST *request,
 		.body = HTTP_BODY_NONE,
 		.body_str = "application/x-www-form-urlencoded",
 		.require_auth = false,
+		.timeout = 4,
 		.force_to = HTTP_BODY_PLAIN
 	};
 	*out = '\0';
@@ -232,7 +158,7 @@ static ssize_t rest_xlat(void *instance, REQUEST *request,
 
 	RDEBUG("Expanding URI components");
 
-	handle = fr_connection_get(inst->pool);
+	handle = fr_connection_get(inst->conn_pool);
 	if (!handle) return -1;
 
 	/*
@@ -279,20 +205,14 @@ static ssize_t rest_xlat(void *instance, REQUEST *request,
 	ret = rest_request_config(instance, &section, request, handle, section.method, section.body,
 				  uri, NULL, NULL);
 	talloc_free(uri);
-	if (ret < 0) {
-		outlen = -1;
-		goto finish;
-	}
+	if (ret < 0) return -1;
 
 	/*
 	 *  Send the CURL request, pre-parse headers, aggregate incoming
 	 *  HTTP body data into a single contiguous buffer.
 	 */
 	ret = rest_request_perform(instance, &section, request, handle);
-	if (ret < 0) {
-		outlen = -1;
-		goto finish;
-	}
+	if (ret < 0) return -1;
 
 	hcode = rest_get_handle_code(handle);
 	switch (hcode) {
@@ -303,7 +223,8 @@ static ssize_t rest_xlat(void *instance, REQUEST *request,
 	{
 		outlen = -1;
 error:
-		rest_response_error(request, handle);
+		len = rest_get_handle_data(&body, handle);
+		if (len > 0) REDEBUG("%s", body);
 		goto finish;
 	}
 	case 204:
@@ -339,7 +260,7 @@ error:
 finish:
 	rlm_rest_cleanup(instance, &section, handle);
 
-	fr_connection_release(inst->pool, handle);
+	fr_connection_release(inst->conn_pool, handle);
 
 	return outlen;
 }
@@ -362,7 +283,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 
 	if (!section->name) return RLM_MODULE_NOOP;
 
-	handle = fr_connection_get(inst->pool);
+	handle = fr_connection_get(inst->conn_pool);
 	if (!handle) return RLM_MODULE_FAIL;
 
 	ret = rlm_rest_perform(instance, section, handle, request, NULL, NULL);
@@ -417,20 +338,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	}
 
 finish:
-	switch (rcode) {
-	case RLM_MODULE_INVALID:
-	case RLM_MODULE_FAIL:
-	case RLM_MODULE_USERLOCK:
-		rest_response_error(request, handle);
-		break;
-
-	default:
-		break;
-	}
-
 	rlm_rest_cleanup(instance, section, handle);
 
-	fr_connection_release(inst->pool, handle);
+	fr_connection_release(inst->conn_pool, handle);
 
 	return rcode;
 }
@@ -438,7 +348,7 @@ finish:
 /*
  *	Authenticate the user with the given password.
  */
-static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, UNUSED REQUEST *request)
 {
 	rlm_rest_t *inst = instance;
 	rlm_rest_section_t *section = &inst->authenticate;
@@ -467,7 +377,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		return RLM_MODULE_INVALID;
 	}
 
-	handle = fr_connection_get(inst->pool);
+	handle = fr_connection_get(inst->conn_pool);
 	if (!handle) return RLM_MODULE_FAIL;
 
 	ret = rlm_rest_perform(instance, section, handle, request, username->vp_strvalue, password->vp_strvalue);
@@ -522,20 +432,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	}
 
 finish:
-	switch (rcode) {
-	case RLM_MODULE_INVALID:
-	case RLM_MODULE_FAIL:
-	case RLM_MODULE_USERLOCK:
-		rest_response_error(request, handle);
-		break;
-
-	default:
-		break;
-	}
-
 	rlm_rest_cleanup(instance, section, handle);
 
-	fr_connection_release(inst->pool, handle);
+	fr_connection_release(inst->conn_pool, handle);
 
 	return rcode;
 }
@@ -543,7 +442,7 @@ finish:
 /*
  *	Send accounting info to a REST API endpoint
  */
-static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, UNUSED REQUEST *request)
 {
 	rlm_rest_t *inst = instance;
 	rlm_rest_section_t *section = &inst->accounting;
@@ -555,7 +454,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 
 	if (!section->name) return RLM_MODULE_NOOP;
 
-	handle = fr_connection_get(inst->pool);
+	handle = fr_connection_get(inst->conn_pool);
 	if (!handle) return RLM_MODULE_FAIL;
 
 	ret = rlm_rest_perform(inst, section, handle, request, NULL, NULL);
@@ -579,19 +478,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	}
 
 finish:
-	switch (rcode) {
-	case RLM_MODULE_INVALID:
-	case RLM_MODULE_FAIL:
-		rest_response_error(request, handle);
-		break;
-
-	default:
-		break;
-	}
-
 	rlm_rest_cleanup(inst, section, handle);
 
-	fr_connection_release(inst->pool, handle);
+	fr_connection_release(inst->conn_pool, handle);
 
 	return rcode;
 }
@@ -599,7 +488,7 @@ finish:
 /*
  *	Send post-auth info to a REST API endpoint
  */
-static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, UNUSED REQUEST *request)
 {
 	rlm_rest_t *inst = instance;
 	rlm_rest_section_t *section = &inst->post_auth;
@@ -611,7 +500,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 
 	if (!section->name) return RLM_MODULE_NOOP;
 
-	handle = fr_connection_get(inst->pool);
+	handle = fr_connection_get(inst->conn_pool);
 	if (!handle) return RLM_MODULE_FAIL;
 
 	ret = rlm_rest_perform(inst, section, handle, request, NULL, NULL);
@@ -635,113 +524,12 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	}
 
 finish:
-	switch (rcode) {
-	case RLM_MODULE_INVALID:
-	case RLM_MODULE_FAIL:
-		rest_response_error(request, handle);
-		break;
-
-	default:
-		break;
-	}
-
 	rlm_rest_cleanup(inst, section, handle);
 
-	fr_connection_release(inst->pool, handle);
+	fr_connection_release(inst->conn_pool, handle);
 
 	return rcode;
 }
-
-#ifdef WITH_COA
-/*
- *	Create the set of attribute-value pairs to check and reply
- *	with for this user from the database.
- */
-static rlm_rcode_t CC_HINT(nonnull) mod_recv_coa(void *instance, REQUEST *request)
-{
-	rlm_rest_t *inst = instance;
-	rlm_rest_section_t *section = &inst->recv_coa;
-
-	void *handle;
-	int hcode;
-	int rcode = RLM_MODULE_OK;
-	int ret;
-
-	if (!section->name) return RLM_MODULE_NOOP;
-
-	handle = fr_connection_get(inst->pool);
-	if (!handle) return RLM_MODULE_FAIL;
-
-	ret = rlm_rest_perform(instance, section, handle, request, NULL, NULL);
-	if (ret < 0) {
-		rcode = RLM_MODULE_FAIL;
-		goto finish;
-	}
-
-	hcode = rest_get_handle_code(handle);
-	switch (hcode) {
-	case 404:
-	case 410:
-		rcode = RLM_MODULE_NOTFOUND;
-		break;
-
-	case 403:
-		rcode = RLM_MODULE_USERLOCK;
-		break;
-
-	case 401:
-		/*
-		 *	Attempt to parse content if there was any.
-		 */
-		ret = rest_response_decode(inst, section, request, handle);
-		if (ret < 0) {
-			rcode = RLM_MODULE_FAIL;
-			break;
-		}
-
-		rcode = RLM_MODULE_REJECT;
-		break;
-
-	case 204:
-		rcode = RLM_MODULE_OK;
-		break;
-
-	default:
-		/*
-		 *	Attempt to parse content if there was any.
-		 */
-		if ((hcode >= 200) && (hcode < 300)) {
-			ret = rest_response_decode(inst, section, request, handle);
-			if (ret < 0) 	   rcode = RLM_MODULE_FAIL;
-			else if (ret == 0) rcode = RLM_MODULE_OK;
-			else		   rcode = RLM_MODULE_UPDATED;
-			break;
-		} else if (hcode < 500) {
-			rcode = RLM_MODULE_INVALID;
-		} else {
-			rcode = RLM_MODULE_FAIL;
-		}
-	}
-
-finish:
-	switch (rcode) {
-	case RLM_MODULE_INVALID:
-	case RLM_MODULE_FAIL:
-	case RLM_MODULE_USERLOCK:
-		rest_response_error(request, handle);
-		break;
-
-	default:
-		break;
-	}
-
-	rlm_rest_cleanup(instance, section, handle);
-
-	fr_connection_release(inst->pool, handle);
-
-	return rcode;
-}
-#endif
 
 static int parse_sub_section(CONF_SECTION *parent, rlm_rest_section_t *config, rlm_components_t comp)
 {
@@ -790,7 +578,6 @@ static int parse_sub_section(CONF_SECTION *parent, rlm_rest_section_t *config, r
 	}
 
 	config->method = fr_str2int(http_method_table, config->method_str, HTTP_METHOD_CUSTOM);
-	config->timeout = ((config->timeout_tv.tv_usec * 1000) + (config->timeout_tv.tv_sec / 1000));
 
 	/*
 	 *  We don't have any custom user data, so we need to select the right encoder based
@@ -821,11 +608,6 @@ static int parse_sub_section(CONF_SECTION *parent, rlm_rest_section_t *config, r
 				      "markup format", config->body_str);
 			return -1;
 
-		case HTTP_BODY_UNAVAILABLE:
-			cf_log_err_cs(cs, "Unavailable HTTP body type.  \"%s\" is not available in this "
-				      "build", config->body_str);
-			return -1;
-
 		default:
 			break;
 		}
@@ -845,53 +627,8 @@ static int parse_sub_section(CONF_SECTION *parent, rlm_rest_section_t *config, r
 		}
 	}
 
-	if (config->force_to_str) {
-		config->force_to = fr_str2int(http_body_type_table, config->force_to_str, HTTP_BODY_UNKNOWN);
-		if (config->force_to == HTTP_BODY_UNKNOWN) {
-			config->force_to = fr_str2int(http_content_type_table, config->force_to_str, HTTP_BODY_UNKNOWN);
-		}
-
-		if (config->force_to == HTTP_BODY_UNKNOWN) {
-			cf_log_err_cs(cs, "Unknown forced response body type '%s'", config->force_to_str);
-			return -1;
-		}
-
-		switch (http_body_type_supported[config->force_to]) {
-		case HTTP_BODY_UNSUPPORTED:
-			cf_log_err_cs(cs, "Unsupported forced response body type \"%s\", please submit patches",
-				      config->force_to_str);
-			return -1;
-
-		case HTTP_BODY_INVALID:
-			cf_log_err_cs(cs, "Invalid HTTP forced response body type.  \"%s\" is not a valid web API data "
-				      "markup format", config->force_to_str);
-			return -1;
-
-		default:
-			break;
-		}
-	}
-
 	return 0;
 }
-
-
-static int mod_bootstrap(CONF_SECTION *conf, void *instance)
-{
-	rlm_rest_t *inst = instance;
-
-	inst->xlat_name = cf_section_name2(conf);
-	if (!inst->xlat_name) inst->xlat_name = cf_section_name1(conf);
-
-	/*
-	 *	Register the rest xlat function
-	 */
-	xlat_register(inst->xlat_name, rest_xlat, rest_uri_escape, inst);
-	xlat_register("jsonquote", jsonquote_xlat, NULL, inst);
-
-	return 0;
-}
-
 
 /*
  *	Do any per-module initialization that is separate to each
@@ -906,22 +643,31 @@ static int mod_bootstrap(CONF_SECTION *conf, void *instance)
 static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
 	rlm_rest_t *inst = instance;
+	char const *xlat_name;
+
+	xlat_name = cf_section_name2(conf);
+	if (!xlat_name) {
+		xlat_name = cf_section_name1(conf);
+	}
+
+	inst->xlat_name = xlat_name;
+
+	/*
+	 *	Register the rest xlat function
+	 */
+	xlat_register(inst->xlat_name, rest_xlat, rest_uri_escape, inst);
 
 	/*
 	 *	Parse sub-section configs.
 	 */
 	if (
-		(parse_sub_section(conf, &inst->authorize, MOD_AUTHORIZE) < 0) ||
-		(parse_sub_section(conf, &inst->authenticate, MOD_AUTHENTICATE) < 0) ||
-		(parse_sub_section(conf, &inst->accounting, MOD_ACCOUNTING) < 0) ||
-
-#ifdef WITH_COA
-		(parse_sub_section(conf, &inst->recv_coa, MOD_RECV_COA) < 0) ||
-#endif
+		(parse_sub_section(conf, &inst->authorize, RLM_COMPONENT_AUTZ) < 0) ||
+		(parse_sub_section(conf, &inst->authenticate, RLM_COMPONENT_AUTH) < 0) ||
+		(parse_sub_section(conf, &inst->accounting, RLM_COMPONENT_ACCT) < 0) ||
 
 /* @todo add behaviour for checksimul */
-/*		(parse_sub_section(conf, &inst->checksimul, MOD_SESSION) < 0) || */
-		(parse_sub_section(conf, &inst->post_auth, MOD_POST_AUTH) < 0))
+/*		(parse_sub_section(conf, &inst->checksimul, RLM_COMPONENT_SESS) < 0) || */
+		(parse_sub_section(conf, &inst->post_auth, RLM_COMPONENT_POST_AUTH) < 0))
 	{
 		return -1;
 	}
@@ -933,10 +679,10 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		return -1;
 	}
 
-	inst->connect_timeout = ((inst->connect_timeout_tv.tv_usec * 1000) +
-				 (inst->connect_timeout_tv.tv_sec / 1000));
-	inst->pool = fr_connection_pool_module_init(conf, inst, mod_conn_create, mod_conn_alive, NULL);
-	if (!inst->pool) return -1;
+	inst->conn_pool = fr_connection_pool_module_init(conf, inst, mod_conn_create, mod_conn_alive, NULL);
+	if (!inst->conn_pool) {
+		return -1;
+	}
 
 	return 0;
 }
@@ -949,7 +695,9 @@ static int mod_detach(void *instance)
 {
 	rlm_rest_t *inst = instance;
 
-	fr_connection_pool_free(inst->pool);
+	fr_connection_pool_delete(inst->conn_pool);
+
+	xlat_unregister(inst->xlat_name, rest_xlat, instance);
 
 	/* Free any memory used by libcurl */
 	rest_cleanup();
@@ -966,23 +714,22 @@ static int mod_detach(void *instance)
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
-extern module_t rlm_rest;
 module_t rlm_rest = {
-	.magic		= RLM_MODULE_INIT,
-	.name		= "rest",
-	.type		= RLM_TYPE_THREAD_SAFE,
-	.inst_size	= sizeof(rlm_rest_t),
-	.config		= module_config,
-	.bootstrap	= mod_bootstrap,
-	.instantiate	= mod_instantiate,
-	.detach		= mod_detach,
-	.methods = {
-		[MOD_AUTHENTICATE]	= mod_authenticate,
-		[MOD_AUTHORIZE]		= mod_authorize,
-		[MOD_ACCOUNTING]	= mod_accounting,
-		[MOD_POST_AUTH]		= mod_post_auth,
-#ifdef WITH_COA
-		[MOD_RECV_COA]		= mod_recv_coa
-#endif
+	RLM_MODULE_INIT,
+	"rlm_rest",
+	RLM_TYPE_THREAD_SAFE,		/* type */
+	sizeof(rlm_rest_t),
+	module_config,
+	mod_instantiate,		/* instantiation */
+	mod_detach,			/* detach */
+	{
+		mod_authenticate,	/* authentication */
+		mod_authorize,		/* authorization */
+		NULL,			/* preaccounting */
+		mod_accounting,		/* accounting */
+		NULL,			/* checksimul */
+		NULL,			/* pre-proxy */
+		NULL,			/* post-proxy */
+		mod_post_auth		/* post-auth */
 	},
 };

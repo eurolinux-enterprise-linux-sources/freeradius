@@ -20,20 +20,17 @@ SOURCES		:= cbuff.c \
 		   md4.c \
 		   md5.c \
 		   net.c \
-		   pair.c \
 		   pcap.c \
 		   print.c \
 		   radius.c \
 		   rbtree.c \
-		   regex.c \
 		   sha1.c \
 		   snprintf.c \
 		   strlcat.c \
 		   strlcpy.c \
-		   socket.c \
 		   token.c \
 		   udpfromto.c \
-		   value.c \
+		   valuepair.c \
 		   fifo.c \
 		   packet.c \
 		   event.c \

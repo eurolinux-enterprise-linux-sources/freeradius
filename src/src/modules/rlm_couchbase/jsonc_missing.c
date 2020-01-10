@@ -14,17 +14,16 @@
  *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-/**
+/*
  * $Id$
  *
  * @brief Workarounds for missing functions in older json-c libraries.
- * @file jsonc_missing.c
+ * @file json_missing.c
  *
- * @author Aaron Hurt <ahurt@anbcs.com>
- * @copyright 2013-2014 The FreeRADIUS Server Project.
+ * @copyright 2013-2014 Aaron Hurt <ahurt@anbcs.com>
  */
 
-RCSID("$Id$")
+RCSID("$Id$");
 
 #include <string.h>
 
@@ -38,9 +37,9 @@ RCSID("$Id$")
 
 #ifndef HAVE_JSON_OBJECT_GET_STRING_LEN
 int json_object_get_string_len(json_object *obj) {
-	if ((obj == NULL) || (json_object_get_type(obj) != json_type_string))
+	if (json_object_get_type(obj) != json_type_string)
 		return 0;
-	return (int)strlen(json_object_get_string(obj));
+	return (int)strlen(json_object_to_json_string(obj));
 }
 #endif
 
@@ -63,6 +62,27 @@ int json_object_object_get_ex(struct json_object *jso, const char *key, struct j
 		if (value != NULL) *value = NULL;
 		return 0;
 	}
+}
+#endif
+
+#ifndef HAVE_JSON_TOKENER_PARSE_VERBOSE
+struct json_object* json_tokener_parse_verbose(const char *str, enum json_tokener_error *error) {
+	struct json_tokener* tok;
+	struct json_object* obj;
+
+	tok = json_tokener_new();
+	if (!tok)
+		return NULL;
+	obj = json_tokener_parse_ex(tok, str, -1);
+	*error = tok->err;
+	if(tok->err != json_tokener_success) {
+		if (obj != NULL)
+			json_object_put(obj);
+		obj = NULL;
+	}
+
+	json_tokener_free(tok);
+	return obj;
 }
 #endif
 

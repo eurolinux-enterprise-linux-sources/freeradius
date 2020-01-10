@@ -22,36 +22,11 @@
 
 RCSID("$Id$")
 
-#include <freeradius-devel/libradius.h>
+#include	<freeradius-devel/libradius.h>
 
-#include <ctype.h>
-#include <sys/file.h>
-#include <fcntl.h>
-#include <grp.h>
-#include <pwd.h>
-#include <sys/uio.h>
-
-#ifdef HAVE_DIRENT_H
-#include <dirent.h>
-
-/*
- *	Some versions of Linux don't have closefrom(), but they will
- *	have /proc.
- *
- *	BSD systems will generally have closefrom(), but not proc.
- *
- *	OSX doesn't have closefrom() or /proc/self/fd, but it does
- *	have /dev/fd
- */
-#ifdef __linux__
-#define CLOSEFROM_DIR "/proc/self/fd"
-#elif defined(__APPLE__)
-#define CLOSEFROM_DIR "/dev/fd"
-#else
-#undef HAVE_DIRENT_H
-#endif
-
-#endif
+#include	<ctype.h>
+#include	<sys/file.h>
+#include	<fcntl.h>
 
 #define FR_PUT_LE16(a, val)\
 	do {\
@@ -59,15 +34,23 @@ RCSID("$Id$")
 		a[0] = ((uint16_t) (val)) & 0xff;\
 	} while (0)
 
+#ifdef HAVE_PTHREAD_H
+#  define PTHREAD_MUTEX_LOCK pthread_mutex_lock
+#  define PTHREAD_MUTEX_UNLOCK pthread_mutex_unlock
+#else
+#  define PTHREAD_MUTEX_LOCK(_x)
+#  define PTHREAD_MUTEX_UNLOCK(_x)
+#endif
+
 bool	fr_dns_lookups = false;	    /* IP -> hostname lookups? */
 bool    fr_hostname_lookups = true; /* hostname -> IP lookups? */
-int	fr_debug_lvl = 0;
+int	fr_debug_flag = 0;
 
 static char const *months[] = {
 	"jan", "feb", "mar", "apr", "may", "jun",
 	"jul", "aug", "sep", "oct", "nov", "dec" };
 
-fr_thread_local_setup(char *, fr_inet_ntop_buffer)	/* macro */
+fr_thread_local_setup(char *, fr_inet_ntop_buffer);	/* macro */
 
 typedef struct fr_talloc_link {
 	bool armed;
@@ -100,28 +83,6 @@ int fr_set_signal(int sig, sig_t func)
 	}
 #endif
 	return 0;
-}
-
-/** Uninstall a signal for a specific handler
- *
- * man sigaction says these are fine to call from a signal handler.
- *
- * @param sig SIGNAL
- */
-int fr_unset_signal(int sig)
-{
-#ifdef HAVE_SIGACTION
-        struct sigaction act;
-
-        memset(&act, 0, sizeof(act));
-        act.sa_flags = 0;
-        sigemptyset(&act.sa_mask);
-        act.sa_handler = SIG_DFL;
-
-        return sigaction(sig, &act, NULL);
-#else
-        return signal(sig, SIG_DFL);
-#endif
 }
 
 static int _fr_trigger_talloc_ctx_free(fr_talloc_link_t *trigger)
@@ -242,114 +203,46 @@ char const *ip_ntoa(char *buffer, uint32_t ipaddr)
 	return buffer;
 }
 
-/*
- *	Parse decimal digits until we run out of decimal digits.
- */
-static int ip_octet_from_str(char const *str, uint32_t *poctet)
-{
-	uint32_t octet;
-	char const *p = str;
-
-	if ((*p < '0') || (*p > '9')) {
-		return -1;
-	}
-
-	octet = 0;
-
-	while ((*p >= '0') && (*p <= '9')) {
-		octet *= 10;
-		octet += *p - '0';
-		p++;
-
-		if (octet > 255) return -1;
-	}
-
-
-	*poctet = octet;
-	return p - str;
-}
-
-static int ip_prefix_from_str(char const *str, uint32_t *paddr)
-{
-	int shift, length;
-	uint32_t octet;
-	uint32_t addr;
-	char const *p = str;
-
-	addr = 0;
-
-	for (shift = 24; shift >= 0; shift -= 8) {
-		length = ip_octet_from_str(p, &octet);
-		if (length <= 0) return -1;
-
-		addr |= octet << shift;
-		p += length;
-
-		/*
-		 *	EOS or / means we're done.
-		 */
-		if (!*p || (*p == '/')) break;
-
-		/*
-		 *	We require dots between octets.
-		 */
-		if (*p != '.') return -1;
-		p++;
-	}
-
-	*paddr = htonl(addr);
-	return p - str;
-}
-
-
-/**
- * Parse an IPv4 address, IPv4 prefix in presentation format (and others), or
- * a hostname.
+/** Parse an IPv4 address or IPv4 prefix in presentation format (and others)
  *
  * @param out Where to write the ip address value.
- * @param value to parse, may be dotted quad [+ prefix], or integer, or octal number, or '*' (INADDR_ANY), or a hostname.
- * @param inlen Length of value, if value is \0 terminated inlen may be -1.
+ * @param value to parse, may be dotted quad [+ prefix], or integer, or octal number, or '*' (INADDR_ANY).
+ * @param inlen Length of value, if value is \0 terminated inlen may be 0.
  * @param resolve If true and value doesn't look like an IP address, try and resolve value as a hostname.
- * @param fallback to IPv6 resolution if no A records can be found.
+ * @param fallback to IPv4 resolution if no A records can be found.
  * @return 0 if ip address was parsed successfully, else -1 on error.
  */
-int fr_pton4(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, bool fallback)
+int fr_pton4(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bool fallback)
 {
 	char *p;
-	unsigned int mask;
+	unsigned int prefix;
 	char *eptr;
 
-	/* Dotted quad + / + [0-9]{1,2} or a hostname (RFC1035 2.3.4 Size limits) */
-	char buffer[256];
+	/* Dotted quad + / + [0-9]{1,2} */
+	char buffer[INET_ADDRSTRLEN + 3];
 
 	/*
 	 *	Copy to intermediary buffer if we were given a length
 	 */
-	if (inlen >= 0) {
-		if (inlen >= (ssize_t)sizeof(buffer)) {
+	if (inlen > 0) {
+		if (inlen >= sizeof(buffer)) {
 			fr_strerror_printf("Invalid IPv4 address string \"%s\"", value);
 			return -1;
 		}
 		memcpy(buffer, value, inlen);
 		buffer[inlen] = '\0';
-		value = buffer;
 	}
 
 	p = strchr(value, '/');
-
 	/*
 	 *	192.0.2.2 is parsed as if it was /32
 	 */
 	if (!p) {
-		out->prefix = 32;
-		out->af = AF_INET;
-
 		/*
 		 *	Allow '*' as the wildcard address usually 0.0.0.0
 		 */
 		if ((value[0] == '*') && (value[1] == '\0')) {
 			out->ipaddr.ip4addr.s_addr = htonl(INADDR_ANY);
-
 		/*
 		 *	Convert things which are obviously integers to IP addresses
 		 *
@@ -358,99 +251,107 @@ int fr_pton4(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, b
 		 */
 		} else if (is_integer(value) || ((value[0] == '0') && (value[1] == 'x'))) {
 			out->ipaddr.ip4addr.s_addr = htonl(strtoul(value, NULL, 0));
-
 		} else if (!resolve) {
-			if (inet_pton(AF_INET, value, &out->ipaddr.ip4addr.s_addr) <= 0) {
-				fr_strerror_printf("Failed to parse IPv4 addreess string \"%s\"", value);
+			if (inet_pton(AF_INET, value, &(out->ipaddr.ip4addr.s_addr)) <= 0) {
+				fr_strerror_printf("Failed to parse IPv4 address string \"%s\"", value);
 				return -1;
 			}
 		} else if (ip_hton(out, AF_INET, value, fallback) < 0) return -1;
+
+		out->prefix = 32;
+		out->af = AF_INET;
 
 		return 0;
 	}
 
 	/*
-	 *	Copy the IP portion into a temporary buffer if we haven't already.
+	 *	Otherwise parse the prefix
 	 */
-	if (inlen < 0) memcpy(buffer, value, p - value);
-	buffer[p - value] = '\0';
-
-	if (ip_prefix_from_str(buffer, &out->ipaddr.ip4addr.s_addr) <= 0) {
-		fr_strerror_printf("Failed to parse IPv4 address string \"%s\"", value);
+	if ((size_t)(p - value) >= INET_ADDRSTRLEN) {
+		fr_strerror_printf("Invalid IPv4 address string \"%s\"", value);
 		return -1;
 	}
 
-	mask = strtoul(p + 1, &eptr, 10);
-	if (mask > 32) {
+	/*
+	 *	Copy the IP portion into a temporary buffer if we haven't already.
+	 */
+	if (inlen == 0) memcpy(buffer, value, p - value);
+	buffer[p - value] = '\0';
+
+	if (!resolve) {
+		if (inet_pton(AF_INET, buffer, &(out->ipaddr.ip4addr.s_addr)) <= 0) {
+			fr_strerror_printf("Failed to parse IPv4 address string \"%s\"", value);
+			return -1;
+		}
+	} else if (ip_hton(out, AF_INET, buffer, fallback) < 0) return -1;
+
+	prefix = strtoul(p + 1, &eptr, 10);
+	if (prefix > 32) {
 		fr_strerror_printf("Invalid IPv4 mask length \"%s\".  Should be between 0-32", p);
 		return -1;
 	}
-
 	if (eptr[0] != '\0') {
 		fr_strerror_printf("Failed to parse IPv4 address string \"%s\", "
 				   "got garbage after mask length \"%s\"", value, eptr);
 		return -1;
 	}
 
-	if (mask < 32) {
-		out->ipaddr.ip4addr = fr_inaddr_mask(&out->ipaddr.ip4addr, mask);
+	if (prefix < 32) {
+		out->ipaddr.ip4addr = fr_inaddr_mask(&(out->ipaddr.ip4addr), prefix);
 	}
 
-	out->prefix = (uint8_t) mask;
+	out->prefix = (uint8_t) prefix;
 	out->af = AF_INET;
 
 	return 0;
 }
 
-/**
- * Parse an IPv6 address or IPv6 prefix in presentation format (and others),
- * or a hostname.
+/** Parse an IPv6 address or IPv6 prefix in presentation format (and others)
  *
  * @param out Where to write the ip address value.
  * @param value to parse.
- * @param inlen Length of value, if value is \0 terminated inlen may be -1.
+ * @param inlen Length of value, if value is \0 terminated inlen may be 0.
  * @param resolve If true and value doesn't look like an IP address, try and resolve value as a hostname.
  * @param fallback to IPv4 resolution if no AAAA records can be found.
  * @return 0 if ip address was parsed successfully, else -1 on error.
  */
-int fr_pton6(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, bool fallback)
+int fr_pton6(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve, bool fallback)
 {
 	char const *p;
 	unsigned int prefix;
 	char *eptr;
 
-	/* IPv6  + / + [0-9]{1,3} or a hostname (RFC1035 2.3.4 Size limits) */
-	char buffer[256];
+	/* IPv6  + / + [0-9]{1,3} */
+	char buffer[INET6_ADDRSTRLEN + 4];
 
 	/*
 	 *	Copy to intermediary buffer if we were given a length
 	 */
-	if (inlen >= 0) {
-		if (inlen >= (ssize_t)sizeof(buffer)) {
+	if (inlen > 0) {
+		if (inlen >= sizeof(buffer)) {
 			fr_strerror_printf("Invalid IPv6 address string \"%s\"", value);
 			return -1;
 		}
 		memcpy(buffer, value, inlen);
 		buffer[inlen] = '\0';
-		value = buffer;
 	}
 
 	p = strchr(value, '/');
 	if (!p) {
-		out->prefix = 128;
-		out->af = AF_INET6;
-
 		/*
 		 *	Allow '*' as the wildcard address
 		 */
 		if ((value[0] == '*') && (value[1] == '\0')) {
-			memset(out->ipaddr.ip6addr.s6_addr, 0, sizeof(out->ipaddr.ip6addr.s6_addr));
+			memset(&out->ipaddr.ip6addr.s6_addr, 0, sizeof(out->ipaddr.ip6addr.s6_addr));
 		} else if (!resolve) {
-			if (inet_pton(AF_INET6, value, out->ipaddr.ip6addr.s6_addr) <= 0) {
+			if (inet_pton(AF_INET6, value, &(out->ipaddr.ip6addr.s6_addr)) <= 0) {
 				fr_strerror_printf("Failed to parse IPv6 address string \"%s\"", value);
 				return -1;
 			}
 		} else if (ip_hton(out, AF_INET6, value, fallback) < 0) return -1;
+
+		out->prefix = 128;
+		out->af = AF_INET6;
 
 		return 0;
 	}
@@ -463,11 +364,11 @@ int fr_pton6(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, b
 	/*
 	 *	Copy string to temporary buffer if we didn't do it earlier
 	 */
-	if (inlen < 0) memcpy(buffer, value, p - value);
+	if (inlen == 0) memcpy(buffer, value, p - value);
 	buffer[p - value] = '\0';
 
 	if (!resolve) {
-		if (inet_pton(AF_INET6, buffer, out->ipaddr.ip6addr.s6_addr) <= 0) {
+		if (inet_pton(AF_INET6, buffer, &(out->ipaddr.ip6addr.s6_addr)) <= 0) {
 			fr_strerror_printf("Failed to parse IPv6 address string \"%s\"", value);
 			return -1;
 		}
@@ -487,8 +388,8 @@ int fr_pton6(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, b
 	if (prefix < 128) {
 		struct in6_addr addr;
 
-		addr = fr_in6addr_mask(&out->ipaddr.ip6addr, prefix);
-		memcpy(out->ipaddr.ip6addr.s6_addr, addr.s6_addr, sizeof(out->ipaddr.ip6addr.s6_addr));
+		addr = fr_in6addr_mask(&(out->ipaddr.ip6addr), prefix);
+		memcpy(&(out->ipaddr.ip6addr.s6_addr), &addr, sizeof(addr));
 	}
 
 	out->prefix = (uint8_t) prefix;
@@ -499,29 +400,25 @@ int fr_pton6(fr_ipaddr_t *out, char const *value, ssize_t inlen, bool resolve, b
 
 /** Simple wrapper to decide whether an IP value is v4 or v6 and call the appropriate parser.
  *
- * @param[out] out Where to write the ip address value.
- * @param[in] value to parse.
- * @param[in] inlen Length of value, if value is \0 terminated inlen may be -1.
- * @param[in] resolve If true and value doesn't look like an IP address, try and resolve value as a
- *	hostname.
- * @param[in] af If the address type is not obvious from the format, and resolve is true, the DNS
- *	record (A or AAAA) we require.  Also controls which parser we pass the address to if
- *	we have no idea what it is.
- * @return
- *	- 0 if ip address was parsed successfully.
- *	- -1 on failure.
+ * @param out Where to write the ip address value.
+ * @param value to parse.
+ * @param inlen Length of value, if value is \0 terminated inlen may be 0.
+ * @param resolve If true and value doesn't look like an IP address, try and resolve value as a hostname.
+ * @return 0 if ip address was parsed successfully, else -1 on error.
  */
-int fr_pton(fr_ipaddr_t *out, char const *value, ssize_t inlen, int af, bool resolve)
+int fr_pton(fr_ipaddr_t *out, char const *value, size_t inlen, bool resolve)
 {
 	size_t len, i;
 
-	len = (inlen >= 0) ? (size_t)inlen : strlen(value);
+	len = (inlen == 0) ? strlen(value) : inlen;
 	for (i = 0; i < len; i++) switch (value[i]) {
 	/*
-	 *	':' is illegal in domain names and IPv4 addresses.
+	 *	Chars illegal in domain names and IPv4 addresses.
 	 *	Must be v6 and cannot be a domain.
 	 */
 	case ':':
+	case '[':
+	case ']':
 		return fr_pton6(out, value, inlen, false, false);
 
 	/*
@@ -537,24 +434,8 @@ int fr_pton(fr_ipaddr_t *out, char const *value, ssize_t inlen, int af, bool res
 		 *	Use A record in preference to AAAA record.
 		 */
 		if ((value[i] < '0') || (value[i] > '9')) {
-			if (!resolve) {
-				fr_strerror_printf("Not IPv4/6 address, and asked not to resolve");
-				return -1;
-			}
-			switch (af) {
-			case AF_UNSPEC:
-				return fr_pton4(out, value, inlen, resolve, true);
-
-			case AF_INET:
-				return fr_pton4(out, value, inlen, resolve, false);
-
-			case AF_INET6:
-				return fr_pton6(out, value, inlen, resolve, false);
-
-			default:
-				fr_strerror_printf("Invalid address family %i", af);
-				return -1;
-			}
+			if (!resolve) return -1;
+			return fr_pton4(out, value, inlen, true, true);
 		}
 		break;
 	}
@@ -566,85 +447,26 @@ int fr_pton(fr_ipaddr_t *out, char const *value, ssize_t inlen, int af, bool res
 	return fr_pton4(out, value, inlen, false, false);
 }
 
-/** Parses IPv4/6 address + port, to fr_ipaddr_t and integer
+/** Check if the IP address is equivalent to INADDR_ANY
  *
- * @param[out] out Where to write the ip address value.
- * @param[out] port_out Where to write the port (0 if no port found).
- * @param[in] value to parse.
- * @param[in] inlen Length of value, if value is \0 terminated inlen may be -1.
- * @param[in] af If the address type is not obvious from the format, and resolve is true, the DNS
- *	record (A or AAAA) we require.  Also controls which parser we pass the address to if
- *	we have no idea what it is.
- * @param[in] resolve If true and value doesn't look like an IP address, try and resolve value as a
- *	hostname.
+ * @param addr to chec.
+ * @return true if IP address matches INADDR_ANY or INADDR6_ANY (assumed to be 0), else false.
  */
-int fr_pton_port(fr_ipaddr_t *out, uint16_t *port_out, char const *value, ssize_t inlen, int af, bool resolve)
+bool is_wildcard(fr_ipaddr_t *addr)
 {
-	char const	*p = value, *q;
-	char		*end;
-	unsigned long	port;
-	char		buffer[6];
-	size_t		len;
+	static struct in6_addr in6_addr;
 
-	*port_out = 0;
+	switch (addr->af) {
+	case AF_INET:
+		return (addr->ipaddr.ip4addr.s_addr == htons(INADDR_ANY));
 
-	len = (inlen >= 0) ? (size_t)inlen : strlen(value);
+	case AF_INET6:
+		return (memcmp(addr->ipaddr.ip6addr.s6_addr, in6_addr.s6_addr, sizeof(in6_addr.s6_addr)) == 0) ? true :false;
 
-	if (*p == '[') {
-		if (!(q = memchr(p + 1, ']', len - 1))) {
-			fr_strerror_printf("Missing closing ']' for IPv6 address");
-			return -1;
-		}
-
-		/*
-		 *	inet_pton doesn't like the address being wrapped in []
-		 */
-		if (fr_pton6(out, p + 1, (q - p) - 1, false, false) < 0) return -1;
-
-		if (q[1] == ':') {
-			q++;
-			goto do_port;
-		}
-
-		return 0;
+	default:
+		fr_assert(0);
+		return false;
 	}
-
-	/*
-	 *	Host, IPv4 or IPv6 with no port
-	 */
-	q = memchr(p, ':', len);
-	if (!q) return fr_pton(out, p, len, af, resolve);
-
-	/*
-	 *	IPv4 or host, with port
-	 */
-	if (fr_pton(out, p, (q - p), af, resolve) < 0) return -1;
-
-do_port:
-	/*
-	 *	Valid ports are a maximum of 5 digits, so if the
-	 *	input length indicates there are more than 5 chars
-	 *	after the ':' then there's an issue.
-	 */
-	if (len > (size_t) ((q + sizeof(buffer)) - value)) {
-	error:
-		fr_strerror_printf("IP string contains trailing garbage after port delimiter");
-		return -1;
-	}
-
-	p = q + 1;			/* Move to first digit */
-
-	strlcpy(buffer, p, (len - (p - value)) + 1);
-	port = strtoul(buffer, &end, 10);
-	if (*end != '\0') goto error;	/* Trailing garbage after integer */
-
-	if ((port > UINT16_MAX) || (port == 0)) {
-		fr_strerror_printf("Port %lu outside valid port range 1-" STRINGIFY(UINT16_MAX), port);
-		return -1;
-	}
-	*port_out = port;
-
-	return 0;
 }
 
 int fr_ntop(char *out, size_t outlen, fr_ipaddr_t *addr)
@@ -655,13 +477,6 @@ int fr_ntop(char *out, size_t outlen, fr_ipaddr_t *addr)
 
 	return snprintf(out, outlen, "%s/%i", buffer, addr->prefix);
 }
-
-/*
- *	cppcheck apparently can't pick this up from the system headers.
- */
-#ifdef CPPCHECK
-#define F_WRLCK
-#endif
 
 /*
  *	Internal wrapper for locking, to minimize the number of ifdef's
@@ -848,16 +663,18 @@ static int inet_pton4(char const *src, struct in_addr *dst)
 
 
 #ifdef HAVE_STRUCT_SOCKADDR_IN6
-/** Convert presentation level address to network order binary form
- *
- * @note Does not touch dst unless it's returning 1.
- * @note :: in a full address is silently ignored.
- * @note Inspired by Mark Andrews.
- * @author Paul Vixie, 1996.
- *
- * @param src presentation level address.
- * @param dst where to write output address.
- * @return 1 if `src' is a valid [RFC1884 2.2] address, else 0.
+/* int
+ * inet_pton6(src, dst)
+ *	convert presentation level address to network order binary form.
+ * return:
+ *	1 if `src' is a valid [RFC1884 2.2] address, else 0.
+ * notice:
+ *	(1) does not touch `dst' unless it's returning 1.
+ *	(2) :: in a full address is silently ignored.
+ * credit:
+ *	inspired by Mark Andrews.
+ * author:
+ *	Paul Vixie, 1996.
  */
 static int inet_pton6(char const *src, unsigned char *dst)
 {
@@ -1028,15 +845,7 @@ int ip_hton(fr_ipaddr_t *out, int af, char const *hostname, bool fallback)
 	int rcode;
 	struct addrinfo hints, *ai = NULL, *alt = NULL, *res = NULL;
 
-	/*
-	 *	Avoid malloc for IP addresses.  This helps us debug
-	 *	memory errors when using talloc.
-	 */
-#ifdef TALLOC_DEBUG
-	if (true) {
-#else
 	if (!fr_hostname_lookups) {
-#endif
 #ifdef HAVE_STRUCT_SOCKADDR_IN6
 		if (af == AF_UNSPEC) {
 			char const *p;
@@ -1054,41 +863,35 @@ int ip_hton(fr_ipaddr_t *out, int af, char const *hostname, bool fallback)
 
 		if (af == AF_UNSPEC) af = AF_INET;
 
-		if (!inet_pton(af, hostname, &(out->ipaddr))) return -1;
+		if (!inet_pton(af, hostname, &(out->ipaddr))) {
+			return -1;
+		}
 
 		out->af = af;
 		return 0;
 	}
 
 	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = af;
 
+#ifdef TALLOC_DEBUG
 	/*
-	 *	If we're falling back we need both IPv4 and IPv6 records
+	 *	Avoid malloc for IP addresses.  This helps us debug
+	 *	memory errors when using talloc.
 	 */
-	if (fallback) {
-		hints.ai_family = AF_UNSPEC;
-	} else {
-		hints.ai_family = af;
+	if (af == AF_INET) {
+		/*
+		 *	If it's all numeric, avoid getaddrinfo()
+		 */
+		if (inet_pton(af, hostname, &out->ipaddr.ip4addr) == 1) {
+			return 0;
+		}
 	}
+#endif
 
 	if ((rcode = getaddrinfo(hostname, NULL, &hints, &res)) != 0) {
-		switch (af) {
-		default:
-		case AF_UNSPEC:
-			fr_strerror_printf("Failed resolving \"%s\" to IP address: %s",
-					   hostname, gai_strerror(rcode));
-			return -1;
-
-		case AF_INET:
-			fr_strerror_printf("Failed resolving \"%s\" to IPv4 address: %s",
-					   hostname, gai_strerror(rcode));
-			return -1;
-
-		case AF_INET6:
-			fr_strerror_printf("Failed resolving \"%s\" to IPv6 address: %s",
-					   hostname, gai_strerror(rcode));
-			return -1;
-		}
+		fr_strerror_printf("ip_hton: %s", gai_strerror(rcode));
+		return -1;
 	}
 
 	for (ai = res; ai; ai = ai->ai_next) {
@@ -1106,10 +909,7 @@ int ip_hton(fr_ipaddr_t *out, int af, char const *hostname, bool fallback)
 	rcode = fr_sockaddr2ipaddr((struct sockaddr_storage *)ai->ai_addr,
 				   ai->ai_addrlen, out, NULL);
 	freeaddrinfo(res);
-	if (!rcode) {
-		fr_strerror_printf("Failed converting sockaddr to ipaddr");
-		return -1;
-	}
+	if (!rcode) return -1;
 
 	return 0;
 }
@@ -1146,20 +946,24 @@ char const *ip_ntoh(fr_ipaddr_t const *src, char *dst, size_t cnt)
  *
  * @param ipaddr to mask.
  * @param prefix Number of contiguous bits to mask.
- * @return an ipv4 address with the host portion zeroed out.
+ * @return an ipv6 address with the host portion zeroed out.
  */
 struct in_addr fr_inaddr_mask(struct in_addr const *ipaddr, uint8_t prefix)
 {
 	uint32_t ret;
 
-	if (prefix > 32) prefix = 32;
+	if (prefix > 32) {
+		prefix = 32;
+	}
 
 	/* Short circuit */
-	if (prefix == 32) return *ipaddr;
+	if (prefix == 32) {
+		return *ipaddr;
+	}
 
-	if (prefix == 0) ret = 0;
+	if (prefix == 0)
+		ret = 0;
 	else ret = htonl(~((0x00000001UL << (32 - prefix)) - 1)) & ipaddr->s_addr;
-
 	return (*(struct in_addr *)&ret);
 }
 
@@ -1174,24 +978,23 @@ struct in6_addr fr_in6addr_mask(struct in6_addr const *ipaddr, uint8_t prefix)
 	uint64_t const *p = (uint64_t const *) ipaddr;
 	uint64_t ret[2], *o = ret;
 
-	if (prefix > 128) prefix = 128;
+	if (prefix > 128) {
+		prefix = 128;
+	}
 
 	/* Short circuit */
-	if (prefix == 128) return *ipaddr;
+	if (prefix == 128) {
+		return *ipaddr;
+	}
 
 	if (prefix >= 64) {
 		prefix -= 64;
-		*o++ = 0xffffffffffffffffULL & *p++;	/* lhs portion masked */
+		*o++ = 0xffffffffffffffffULL & *p++;
 	} else {
-		ret[1] = 0;				/* rhs portion zeroed */
+		ret[1] = 0;
 	}
 
-	/* Max left shift is 63 else we get overflow */
-	if (prefix > 0) {
-		*o = htonll(~((uint64_t)(0x0000000000000001ULL << (64 - prefix)) - 1)) & *p;
-	} else {
-		*o = 0;
-	}
+	*o = htonll(~((0x0000000000000001ULL << (64 - prefix)) - 1)) & *p;
 
 	return *(struct in6_addr *) &ret;
 }
@@ -1327,33 +1130,9 @@ bool is_whitespace(char const *value)
 	return true;
 }
 
-/** Check whether the string is made up of printable UTF8 chars
- *
- * @param value to check.
- * @param len of value.
- *
- * @return
- *	- true if the string is printable.
- *	- false if the string contains non printable chars
- */
- bool is_printable(void const *value, size_t len)
- {
- 	uint8_t	const *p = value;
- 	int	clen;
- 	size_t	i;
-
- 	for (i = 0; i < len; i++) {
- 		clen = fr_utf8_char(p, len - i);
- 		if (clen == 0) return false;
- 		i += (size_t)clen;
- 		p += clen;
- 	}
- 	return true;
- }
-
 /** Check whether the string is all numbers
  *
- * @return true if the entirety of the string is all numbers, else false.
+ * @return true if the entirety of the string is are numebrs, else false.
  */
 bool is_integer(char const *value)
 {
@@ -1366,7 +1145,7 @@ bool is_integer(char const *value)
 
 /** Check whether the string is allzeros
  *
- * @return true if the entirety of the string is all zeros, else false.
+ * @return true if the entirety of the string is are numebrs, else false.
  */
 bool is_zero(char const *value)
 {
@@ -1385,63 +1164,20 @@ int closefrom(int fd)
 {
 	int i;
 	int maxfd = 256;
-#ifdef HAVE_DIRENT_H
-	DIR *dir;
-#endif
-
-#ifdef F_CLOSEM
-	if (fcntl(fd, F_CLOSEM) == 0) {
-		return 0;
-	}
-#endif
-
-#ifdef F_MAXFD
-	maxfd = fcntl(fd, F_F_MAXFD);
-	if (maxfd >= 0) goto do_close;
-#endif
 
 #ifdef _SC_OPEN_MAX
 	maxfd = sysconf(_SC_OPEN_MAX);
 	if (maxfd < 0) {
-		maxfd = 256;
+	  maxfd = 256;
 	}
-#endif
-
-#ifdef HAVE_DIRENT_H
-	/*
-	 *	Use /proc/self/fd directory if it exists.
-	 */
-	dir = opendir(CLOSEFROM_DIR);
-	if (dir != NULL) {
-		long my_fd;
-		char *endp;
-		struct dirent *dp;
-
-		while ((dp = readdir(dir)) != NULL) {
-			my_fd = strtol(dp->d_name, &endp, 10);
-			if (my_fd <= 0) continue;
-
-			if (*endp) continue;
-
-			if (my_fd == dirfd(dir)) continue;
-
-			if ((my_fd >= fd) && (my_fd <= maxfd)) {
-				(void) close((int) my_fd);
-			}
-		}
-		(void) closedir(dir);
-		return 0;
-	}
-#endif
-
-#ifdef F_MAXFD
-do_close:
 #endif
 
 	if (fd > maxfd) return 0;
 
 	/*
 	 *	FIXME: return EINTR?
+	 *
+	 *	Use F_CLOSEM?
 	 */
 	for (i = fd; i < maxfd; i++) {
 		close(i);
@@ -1456,14 +1192,12 @@ int fr_ipaddr_cmp(fr_ipaddr_t const *a, fr_ipaddr_t const *b)
 	if (a->af < b->af) return -1;
 	if (a->af > b->af) return +1;
 
-	if (a->prefix < b->prefix) return -1;
-	if (a->prefix > b->prefix) return +1;
-
 	switch (a->af) {
 	case AF_INET:
 		return memcmp(&a->ipaddr.ip4addr,
 			      &b->ipaddr.ip4addr,
 			      sizeof(a->ipaddr.ip4addr));
+		break;
 
 #ifdef HAVE_STRUCT_SOCKADDR_IN6
 	case AF_INET6:
@@ -1473,6 +1207,7 @@ int fr_ipaddr_cmp(fr_ipaddr_t const *a, fr_ipaddr_t const *b)
 		return memcmp(&a->ipaddr.ip6addr,
 			      &b->ipaddr.ip6addr,
 			      sizeof(a->ipaddr.ip6addr));
+		break;
 #endif
 
 	default:
@@ -1485,8 +1220,6 @@ int fr_ipaddr_cmp(fr_ipaddr_t const *a, fr_ipaddr_t const *b)
 int fr_ipaddr2sockaddr(fr_ipaddr_t const *ipaddr, uint16_t port,
 		       struct sockaddr_storage *sa, socklen_t *salen)
 {
-	memset(sa, 0, sizeof(*sa));
-
 	if (ipaddr->af == AF_INET) {
 		struct sockaddr_in s4;
 
@@ -1524,8 +1257,6 @@ int fr_ipaddr2sockaddr(fr_ipaddr_t const *ipaddr, uint16_t port,
 int fr_sockaddr2ipaddr(struct sockaddr_storage const *sa, socklen_t salen,
 		       fr_ipaddr_t *ipaddr, uint16_t *port)
 {
-	memset(ipaddr, 0, sizeof(*ipaddr));
-
 	if (sa->ss_family == AF_INET) {
 		struct sockaddr_in	s4;
 
@@ -1564,165 +1295,6 @@ int fr_sockaddr2ipaddr(struct sockaddr_storage const *sa, socklen_t salen,
 	}
 
 	return 1;
-}
-
-#ifdef O_NONBLOCK
-/** Set O_NONBLOCK on a socket
- *
- * @note O_NONBLOCK is POSIX.
- *
- * @param fd to set nonblocking flag on.
- * @return flags set on the socket, or -1 on error.
- */
-int fr_nonblock(int fd)
-{
-	int flags;
-
-	flags = fcntl(fd, F_GETFL, NULL);
-	if (flags < 0)  {
-		fr_strerror_printf("Failure getting socket flags: %s", fr_syserror(errno));
-		return -1;
-	}
-
-	flags |= O_NONBLOCK;
-	if (fcntl(fd, F_SETFL, flags) < 0) {
-		fr_strerror_printf("Failure setting socket flags: %s", fr_syserror(errno));
-		return -1;
-	}
-
-	return flags;
-}
-
-/** Unset O_NONBLOCK on a socket
- *
- * @note O_NONBLOCK is POSIX.
- *
- * @param fd to set nonblocking flag on.
- * @return flags set on the socket, or -1 on error.
- */
-int fr_blocking(int fd)
-{
-	int flags;
-
-	flags = fcntl(fd, F_GETFL, NULL);
-	if (flags < 0)  {
-		fr_strerror_printf("Failure getting socket flags: %s", fr_syserror(errno));
-		return -1;
-	}
-
-	flags ^= O_NONBLOCK;
-	if (fcntl(fd, F_SETFL, flags) < 0) {
-		fr_strerror_printf("Failure setting socket flags: %s", fr_syserror(errno));
-		return -1;
-	}
-
-	return flags;
-}
-#else
-int fr_nonblock(UNUSED int fd)
-{
-	fr_strerror_printf("Non blocking sockets are not supported");
-	return -1;
-}
-int fr_blocking(UNUSED int fd)
-{
-	fr_strerror_printf("Non blocking sockets are not supported");
-	return -1;
-}
-#endif
-
-/** Write out a vector to a file descriptor
- *
- * Wraps writev, calling it as necessary. If timeout is not NULL,
- * timeout is applied to each call that returns EAGAIN or EWOULDBLOCK
- *
- * @note Should only be used on nonblocking file descriptors.
- * @note Socket should likely be closed on timeout.
- * @note iovec may be modified in such a way that it's not re-usable.
- * @note Leaves errno set to the last error that ocurred.
- *
- * @param fd to write to.
- * @param vector to write.
- * @param iovcnt number of elements in iovec.
- * @param timeout how long to wait for fd to become writeable before timing out.
- * @return number of bytes written, -1 on error.
- */
-ssize_t fr_writev(int fd, struct iovec vector[], int iovcnt, struct timeval *timeout)
-{
-	struct iovec *vector_p = vector;
-	ssize_t total = 0;
-
-	while (iovcnt > 0) {
-		ssize_t wrote;
-
-		wrote = writev(fd, vector_p, iovcnt);
-		if (wrote > 0) {
-			total += wrote;
-			while (wrote > 0) {
-				/*
-				 *	An entire vector element was written
-				 */
-				if (wrote >= (ssize_t)vector_p->iov_len) {
-					iovcnt--;
-					wrote -= vector_p->iov_len;
-					vector_p++;
-					continue;
-				}
-
-				/*
-				 *	Partial vector element was written
-				 */
-				vector_p->iov_len -= wrote;
-				vector_p->iov_base = ((char *)vector_p->iov_base) + wrote;
-				break;
-			}
-			continue;
-		} else if (wrote == 0) return total;
-
-		switch (errno) {
-		/* Write operation would block, use select() to implement a timeout */
-#if EWOULDBLOCK != EAGAIN
-		case EWOULDBLOCK:
-		case EAGAIN:
-#else
-		case EAGAIN:
-#endif
-		{
-			int	ret;
-			fd_set	write_set;
-
-			FD_ZERO(&write_set);
-			FD_SET(fd, &write_set);
-
-			/* Don't let signals mess up the select */
-			do {
-				ret = select(fd + 1, NULL, &write_set, NULL, timeout);
-			} while ((ret == -1) && (errno == EINTR));
-
-			/* Select returned 0 which means it reached the timeout */
-			if (ret == 0) {
-				fr_strerror_printf("Write timed out");
-				return -1;
-			}
-
-			/* Other select error */
-			if (ret < 0) {
-				fr_strerror_printf("Failed waiting on socket: %s", fr_syserror(errno));
-				return -1;
-			}
-
-			/* select said a file descriptor was ready for writing */
-			if (!fr_assert(FD_ISSET(fd, &write_set))) return -1;
-
-			break;
-		}
-
-		default:
-			return -1;
-		}
-	}
-
-	return total;
 }
 
 /** Convert UTF8 string to UCS2 encoding
@@ -1794,13 +1366,6 @@ size_t fr_prints_uint128(char *out, size_t outlen, uint128_t const num)
 	uint64_t n[2];
 	char *p = buff;
 	int i;
-#ifdef FR_LITTLE_ENDIAN
-	const size_t l = 0;
-	const size_t h = 1;
-#else
-	const size_t l = 1;
-	const size_t h = 0;
-#endif
 
 	memset(buff, '0', sizeof(buff) - 1);
 	buff[sizeof(buff) - 1] = '\0';
@@ -1811,11 +1376,11 @@ size_t fr_prints_uint128(char *out, size_t outlen, uint128_t const num)
 		ssize_t j;
 		int carry;
 
-		carry = (n[h] >= 0x8000000000000000);
+		carry = (n[1] >= 0x8000000000000000);
 
 		// Shift n[] left, doubling it
-		n[h] = ((n[h] << 1) & 0xffffffffffffffff) + (n[l] >= 0x8000000000000000);
-		n[l] = ((n[l] << 1) & 0xffffffffffffffff);
+		n[1] = ((n[1] << 1) & 0xffffffffffffffff) + (n[0] >= 0x8000000000000000);
+		n[0] = ((n[0] << 1) & 0xffffffffffffffff);
 
 		// Add s[] to itself in decimal, doubling it
 		for (j = sizeof(buff) - 2; j >= 0; j--) {
@@ -1832,6 +1397,90 @@ size_t fr_prints_uint128(char *out, size_t outlen, uint128_t const num)
 	}
 
 	return strlcpy(out, p, outlen);
+}
+
+/** Calculate powers
+ *
+ * @author Orson Peters
+ * @note Borrowed from the gist here: https://gist.github.com/nightcracker/3551590.
+ *
+ * @param base a 32bit signed integer.
+ * @param exp amount to raise base by.
+ * @return base ^ pow, or 0 on underflow/overflow.
+ */
+int64_t fr_pow(int32_t base, uint8_t exp) {
+	static const uint8_t highest_bit_set[] = {
+		0, 1, 2, 2, 3, 3, 3, 3,
+		4, 4, 4, 4, 4, 4, 4, 4,
+		5, 5, 5, 5, 5, 5, 5, 5,
+		5, 5, 5, 5, 5, 5, 5, 5,
+		6, 6, 6, 6, 6, 6, 6, 6,
+		6, 6, 6, 6, 6, 6, 6, 6,
+		6, 6, 6, 6, 6, 6, 6, 6,
+		6, 6, 6, 6, 6, 6, 6, 255, // anything past 63 is a guaranteed overflow with base > 1
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255,
+	};
+
+	uint64_t result = 1;
+
+	switch (highest_bit_set[exp]) {
+	case 255: // we use 255 as an overflow marker and return 0 on overflow/underflow
+		if (base == 1) {
+			return 1;
+		}
+
+		if (base == -1) {
+			return 1 - 2 * (exp & 1);
+		}
+		return 0;
+	case 6:
+		if (exp & 1) result *= base;
+		exp >>= 1;
+		base *= base;
+	case 5:
+		if (exp & 1) result *= base;
+		exp >>= 1;
+		base *= base;
+	case 4:
+		if (exp & 1) result *= base;
+		exp >>= 1;
+		base *= base;
+	case 3:
+		if (exp & 1) result *= base;
+		exp >>= 1;
+		base *= base;
+	case 2:
+		if (exp & 1) result *= base;
+		exp >>= 1;
+		base *= base;
+	case 1:
+		if (exp & 1) result *= base;
+	default:
+		return result;
+	}
 }
 
 /*

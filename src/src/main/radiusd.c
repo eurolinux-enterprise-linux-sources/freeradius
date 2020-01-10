@@ -29,7 +29,6 @@ RCSID("$Id$")
 
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
-#include <freeradius-devel/state.h>
 #include <freeradius-devel/rad_assert.h>
 
 #include <sys/file.h>
@@ -54,10 +53,14 @@ RCSID("$Id$")
 /*
  *  Global variables.
  */
-char const	*radacct_dir = NULL;
-char const	*radlog_dir = NULL;
-
-bool		log_stripped_names;
+char const *progname = NULL;
+char const *radius_dir = NULL;
+char const *radacct_dir = NULL;
+char const *radlog_dir = NULL;
+char const *radlib_dir = NULL;
+bool log_stripped_names;
+log_debug_t debug_flag = 0;
+bool check_config = false;
 
 char const *radiusd_version = "FreeRADIUS Version " RADIUSD_VERSION_STRING
 #ifdef RADIUSD_VERSION_COMMIT
@@ -65,7 +68,7 @@ char const *radiusd_version = "FreeRADIUS Version " RADIUSD_VERSION_STRING
 #endif
 ", for host " HOSTINFO ", built on " __DATE__ " at " __TIME__;
 
-static pid_t radius_pid;
+pid_t radius_pid;
 
 /*
  *  Configuration items.
@@ -90,35 +93,49 @@ int main(int argc, char *argv[])
 	int status;
 	int argval;
 	bool spawn_flag = true;
+	bool write_pid = false;
 	bool display_version = false;
 	int flag = 0;
 	int from_child[2] = {-1, -1};
-	char *p;
-	fr_state_t *state = NULL;
 
 	/*
-	 *  We probably don't want to free the talloc autofree context
-	 *  directly, so we'll allocate a new context beneath it, and
-	 *  free that before any leak reports.
+	 *	We probably don't want to free the talloc autofree context
+	 *	directly, so we'll allocate a new context beneath it, and
+	 *	free that before any leak reports.
 	 */
 	TALLOC_CTX *autofree = talloc_init("main");
 
-#ifdef OSFC2
-	set_auth_parameters(argc, argv);
+	/*
+	 *	If the server was built with debugging enabled always install
+	 *	the basic fatal signal handlers.
+	 */
+#ifndef NDEBUG
+	if (fr_fault_setup(getenv("PANIC_ACTION"), argv[0]) < 0) {
+		fr_perror("radiusd");
+		exit(EXIT_FAILURE);
+	}
 #endif
+
+#ifdef OSFC2
+	set_auth_parameters(argc,argv);
+#endif
+
+	if ((progname = strrchr(argv[0], FR_DIR_SEP)) == NULL)
+		progname = argv[0];
+	else
+		progname++;
 
 #ifdef WIN32
 	{
 		WSADATA wsaData;
 		if (WSAStartup(MAKEWORD(2, 0), &wsaData)) {
-			fprintf(stderr, "%s: Unable to initialize socket library.\n",
-				main_config.name);
+			fprintf(stderr, "%s: Unable to initialize socket library.\n", progname);
 			exit(EXIT_FAILURE);
 		}
 	}
 #endif
 
-	rad_debug_lvl = 0;
+	debug_flag = 0;
 	set_radius_dir(autofree, RADIUS_DIR);
 
 	/*
@@ -127,14 +144,8 @@ int main(int argc, char *argv[])
 	memset(&main_config, 0, sizeof(main_config));
 	main_config.myip.af = AF_UNSPEC;
 	main_config.port = 0;
+	main_config.name = "radiusd";
 	main_config.daemonize = true;
-
-	p = strrchr(argv[0], FR_DIR_SEP);
-	if (!p) {
-		main_config.name = argv[0];
-	} else {
-		main_config.name = p + 1;
-	}
 
 	/*
 	 *	Don't put output anywhere until we get told a little
@@ -147,7 +158,7 @@ int main(int argc, char *argv[])
 	/*  Process the options.  */
 	while ((argval = getopt(argc, argv, "Cd:D:fhi:l:mMn:p:PstvxX")) != EOF) {
 
-		switch (argval) {
+		switch(argval) {
 			case 'C':
 				check_config = true;
 				spawn_flag = false;
@@ -159,7 +170,7 @@ int main(int argc, char *argv[])
 				break;
 
 			case 'D':
-				main_config.dictionary_dir = talloc_typed_strdup(autofree, optarg);
+				main_config.dictionary_dir = talloc_typed_strdup(NULL, optarg);
 				break;
 
 			case 'f':
@@ -179,8 +190,7 @@ int main(int argc, char *argv[])
 				default_log.fd = open(main_config.log_file,
 							    O_WRONLY | O_APPEND | O_CREAT, 0640);
 				if (default_log.fd < 0) {
-					fprintf(stderr, "%s: Failed to open log file %s: %s\n",
-						main_config.name, main_config.log_file, fr_syserror(errno));
+					fprintf(stderr, "radiusd: Failed to open log file %s: %s\n", main_config.log_file, fr_syserror(errno));
 					exit(EXIT_FAILURE);
 				}
 				fr_log_fp = fdopen(default_log.fd, "a");
@@ -188,8 +198,7 @@ int main(int argc, char *argv[])
 
 			case 'i':
 				if (ip_hton(&main_config.myip, AF_UNSPEC, optarg, false) < 0) {
-					fprintf(stderr, "%s: Invalid IP Address or hostname \"%s\"\n",
-						main_config.name, optarg);
+					fprintf(stderr, "radiusd: Invalid IP Address or hostname \"%s\"\n", optarg);
 					exit(EXIT_FAILURE);
 				}
 				flag |= 1;
@@ -214,8 +223,7 @@ int main(int argc, char *argv[])
 
 				port = strtoul(optarg, 0, 10);
 				if ((port == 0) || (port > UINT16_MAX)) {
-					fprintf(stderr, "%s: Invalid port number \"%s\"\n",
-						main_config.name, optarg);
+					fprintf(stderr, "radiusd: Invalid port number \"%s\"\n", optarg);
 					exit(EXIT_FAILURE);
 				}
 
@@ -226,7 +234,7 @@ int main(int argc, char *argv[])
 
 			case 'P':
 				/* Force the PID to be written, even in -f mode */
-				main_config.write_pid = true;
+				write_pid = true;
 				break;
 
 			case 's':	/* Single process mode */
@@ -245,7 +253,7 @@ int main(int argc, char *argv[])
 			case 'X':
 				spawn_flag = false;
 				main_config.daemonize = false;
-				rad_debug_lvl += 2;
+				debug_flag += 2;
 				main_config.log_auth = true;
 				main_config.log_auth_badpass = true;
 				main_config.log_auth_goodpass = true;
@@ -256,7 +264,7 @@ int main(int argc, char *argv[])
 				break;
 
 			case 'x':
-				rad_debug_lvl++;
+				debug_flag++;
 				break;
 
 			default:
@@ -266,39 +274,42 @@ int main(int argc, char *argv[])
 	}
 
 	/*
-	 *  Mismatch between the binary and the libraries it depends on.
+	 *	Mismatch between the binary and the libraries it depends on
 	 */
 	if (fr_check_lib_magic(RADIUSD_MAGIC_NUMBER) < 0) {
-		fr_perror("%s", main_config.name);
+		fr_perror("radiusd");
 		exit(EXIT_FAILURE);
 	}
 
-	if (rad_check_lib_magic(RADIUSD_MAGIC_NUMBER) < 0) exit(EXIT_FAILURE);
+	if (rad_check_lib_magic(RADIUSD_MAGIC_NUMBER) < 0) {
+		exit(EXIT_FAILURE);
+	}
 
 	/*
-	 *  Mismatch between build time OpenSSL and linked SSL, better to die
-	 *  here than segfault later.
+	 *	Mismatch between build time OpenSSL and linked SSL,
+	 *	better to die here than segfault later.
 	 */
 #ifdef HAVE_OPENSSL_CRYPTO_H
-	if (ssl_check_consistency() < 0) exit(EXIT_FAILURE);
+	if (ssl_check_consistency() < 0) {
+		exit(EXIT_FAILURE);
+	}
 #endif
 
 	if (flag && (flag != 0x03)) {
-		fprintf(stderr, "%s: The options -i and -p cannot be used individually.\n",
-			main_config.name);
+		fprintf(stderr, "radiusd: The options -i and -p cannot be used individually.\n");
 		exit(EXIT_FAILURE);
 	}
 
 	/*
-	 *  According to the talloc peeps, no two threads may modify any part of
-	 *  a ctx tree with a common root without synchronisation.
+	 *	According to the talloc peeps, no two threads
+	 *	may modify any part of a ctx tree with a common
+	 *	root without synchronisation.
 	 *
-	 *  So we can't run with a null context and threads.
+	 *	So we can't run with a null context and threads.
 	 */
 	if (main_config.memory_report) {
 		if (spawn_flag) {
-			fprintf(stderr, "%s: The server cannot produce memory reports (-M) in threaded mode\n",
-				main_config.name);
+			fprintf(stderr, "radiusd: The server cannot produce memory reports (-M) in threaded mode\n");
 			exit(EXIT_FAILURE);
 		}
 		talloc_enable_null_tracking();
@@ -307,75 +318,72 @@ int main(int argc, char *argv[])
 	}
 
 	/*
-	 *  Better here, so it doesn't matter whether we get passed -xv or -vx.
+	 *	Better here, so it doesn't matter whether we get passed
+	 *	-xv or -vx.
 	 */
 	if (display_version) {
-		if (rad_debug_lvl == 0) rad_debug_lvl = 1;
+		/* Don't print timestamps */
+		debug_flag += 2;
 		fr_log_fp = stdout;
 		default_log.dst = L_DST_STDOUT;
 		default_log.fd = STDOUT_FILENO;
 
-		INFO("%s: %s", main_config.name, radiusd_version);
-		version_print();
+		version();
 		exit(EXIT_SUCCESS);
 	}
 
-	if (rad_debug_lvl) version_print();
+	if (debug_flag) {
+		version();
+	}
 
 	/*
-	 *  Under linux CAP_SYS_PTRACE is usually only available before setuid/setguid,
-	 *  so we need to check whether we can attach before calling those functions
-	 *  (in main_config_init()).
-	 */
-	fr_store_debug_state();
-
-	/*
-	 *  Initialising OpenSSL once, here, is safer than having individual modules do it.
+	 *  Initialising OpenSSL once, here, is safer than having individual
+	 *  modules do it.
 	 */
 #ifdef HAVE_OPENSSL_CRYPTO_H
 	tls_global_init();
 #endif
 
 	/*
-	 *  Write the PID always if we're running as a daemon.
+	 *  Initialize any event loops just enough so module instantiations
+	 *  can add fd/event to them, but do not start them yet.
 	 */
-	if (main_config.daemonize) main_config.write_pid = true;
+	if (!radius_event_init(autofree)) {
+		exit(EXIT_FAILURE);
+	}
 
-	/*
-	 *  Read the configuration files, BEFORE doing anything else.
-	 */
-	if (main_config_init() < 0) exit(EXIT_FAILURE);
+	/*  Read the configuration files, BEFORE doing anything else.  */
+	if (main_config_init() < 0) {
+		exit(EXIT_FAILURE);
+	}
 
-	/*
-	 *  This is very useful in figuring out why the panic_action didn't fire.
-	 */
-	INFO("%s", fr_debug_state_to_msg(fr_debug_state));
-
-	/*
-	 *  Check for vulnerabilities in the version of libssl were linked against.
-	 */
-#if defined(HAVE_OPENSSL_CRYPTO_H) && defined(ENABLE_OPENSSL_VERSION_CHECK)
-	if (tls_global_version_check(main_config.allow_vulnerable_openssl) < 0) exit(EXIT_FAILURE);
+	/*  Check for vulnerabilities in the version of libssl were linked against */
+#ifdef HAVE_OPENSSL_CRYPTO_H
+	if (tls_global_version_check(main_config.allow_vulnerable_openssl) < 0) {
+		exit(EXIT_FAILURE);
+	}
 #endif
 
-	fr_talloc_fault_setup();
-
 	/*
-	 *  Set the panic action (if required)
+	 *  Load the modules
 	 */
-	{
-		char const *panic_action = NULL;
+	if (modules_init(main_config.config) < 0) {
+		exit(EXIT_FAILURE);
+	}
 
-		panic_action = getenv("PANIC_ACTION");
-		if (!panic_action) panic_action = main_config.panic_action;
-
-		if (panic_action && (fr_fault_setup(panic_action, argv[0]) < 0)) {
-			fr_perror("%s", main_config.name);
-			exit(EXIT_FAILURE);
-		}
+	/* Set the panic action (if required) */
+	if (main_config.panic_action &&
+#ifndef NDEBUG
+	    !getenv("PANIC_ACTION") &&
+#endif
+	    (fr_fault_setup(main_config.panic_action, argv[0]) < 0)) {
+		fr_perror("radiusd");
+		exit(EXIT_FAILURE);
 	}
 
 #ifndef __MINGW32__
+
+
 	/*
 	 *  Disconnect from session
 	 */
@@ -424,8 +432,8 @@ int main(int argc, char *argv[])
 			close(from_child[1]);
 
 			/*
-			 *  The child writes a 0x01 byte on success, and closes
-			 *  the pipe on error.
+			 *	The child writes a 0x01 byte on
+			 *	success, and closes the pipe on error.
 			 */
 			if ((read(from_child[0], &ret, 1) < 0)) {
 				ret = 0;
@@ -452,44 +460,28 @@ int main(int argc, char *argv[])
 #endif
 
 	/*
-	 *  Ensure that we're using the CORRECT pid after forking, NOT the one
-	 *  we started with.
+	 *	Ensure that we're using the CORRECT pid after forking,
+	 *	NOT the one we started with.
 	 */
 	radius_pid = getpid();
 
 	/*
-	 *  Initialize any event loops just enough so module instantiations can
-	 *  add fd/event to them, but do not start them yet.
-	 *
-	 *  This has to be done post-fork in case we're using kqueue, where the
-	 *  queue isn't inherited by the child process.
-	 */
-	if (!radius_event_init(autofree)) exit(EXIT_FAILURE);
-
-	/*
-	 *   Load the modules
-	 */
-	if (modules_init(main_config.config) < 0) exit(EXIT_FAILURE);
-
-	/*
-	 *  Redirect stderr/stdout as appropriate.
+	 *	Redirect stderr/stdout as appropriate.
 	 */
 	if (radlog_init(&default_log, main_config.daemonize) < 0) {
 		ERROR("%s", fr_strerror());
 		exit(EXIT_FAILURE);
 	}
 
-	event_loop_started = true;
-
 	/*
-	 *  Start the event loop(s) and threads.
+	 *	Start the event loop(s) and threads.
 	 */
 	radius_event_start(main_config.config, spawn_flag);
 
 	/*
-	 *  Now that we've set everything up, we can install the signal
-	 *  handlers.  Before this, if we get any signal, we don't know
-	 *  what to do, so we might as well do the default, and die.
+	 *	Now that we've set everything up, we can install the signal
+	 *	handlers.  Before this, if we get any signal, we don't know
+	 *	what to do, so we might as well do the default, and die.
 	 */
 #ifdef SIGPIPE
 	signal(SIGPIPE, SIG_IGN);
@@ -502,11 +494,11 @@ int main(int argc, char *argv[])
 	}
 
 	/*
-	 *  If we're debugging, then a CTRL-C will cause the server to die
-	 *  immediately.  Use SIGTERM to shut down the server cleanly in
-	 *  that case.
+	 *	If we're debugging, then a CTRL-C will cause the
+	 *	server to die immediately.  Use SIGTERM to shut down
+	 *	the server cleanly in that case.
 	 */
-	if (main_config.debug_memory || (rad_debug_lvl == 0)) {
+	if (main_config.debug_memory || (debug_flag == 0)) {
 		if ((fr_set_signal(SIGINT, sig_fatal) < 0)
 #ifdef SIGQUIT
 		|| (fr_set_signal(SIGQUIT, sig_fatal) < 0)
@@ -518,13 +510,15 @@ int main(int argc, char *argv[])
 	}
 
 	/*
-	 *  Everything seems to have loaded OK, exit gracefully.
+	 *	Everything seems to have loaded OK, exit gracefully.
 	 */
 	if (check_config) {
 		DEBUG("Configuration appears to be OK");
 
 		/* for -C -m|-M */
-		if (main_config.debug_memory) goto cleanup;
+		if (main_config.debug_memory) {
+			goto cleanup;
+		}
 
 		exit(EXIT_SUCCESS);
 	}
@@ -534,21 +528,28 @@ int main(int argc, char *argv[])
 #endif
 
 	/*
-	 *  Write the PID after we've forked, so that we write the correct one.
+	 *	Write the PID always if we're running as a daemon.
 	 */
-	if (main_config.write_pid) {
+	if (main_config.daemonize) write_pid = true;
+
+	/*
+	 *	Write the PID after we've forked, so that we write the
+	 *	correct one.
+	 */
+	if (write_pid) {
 		FILE *fp;
 
 		fp = fopen(main_config.pid_file, "w");
 		if (fp != NULL) {
 			/*
-			 *  @fixme What about following symlinks,
-			 *  and having it over-write a normal file?
+			 *	FIXME: What about following symlinks,
+			 *	and having it over-write a normal file?
 			 */
 			fprintf(fp, "%d\n", (int) radius_pid);
 			fclose(fp);
 		} else {
-			ERROR("Failed creating PID file %s: %s", main_config.pid_file, fr_syserror(errno));
+			ERROR("Failed creating PID file %s: %s\n",
+			       main_config.pid_file, fr_syserror(errno));
 			exit(EXIT_FAILURE);
 		}
 	}
@@ -556,10 +557,11 @@ int main(int argc, char *argv[])
 	exec_trigger(NULL, NULL, "server.start", false);
 
 	/*
-	 *  Inform the parent (who should still be waiting) that the rest of
-	 *  initialisation went OK, and that it should exit with a 0 status.
-	 *  If we don't get this far, then we just close the pipe on exit, and the
-	 *  parent gets a read failure.
+	 *	Inform the parent (who should still be waiting) that
+	 *	the rest of initialisation went OK, and that it should
+	 *	exit with a 0 status.  If we don't get this far, then
+	 *	we just close the pipe on exit, and the parent gets a
+	 *	read failure.
 	 */
 	if (main_config.daemonize) {
 		if (write(from_child[1], "\001", 1) < 0) {
@@ -570,17 +572,12 @@ int main(int argc, char *argv[])
 	}
 
 	/*
-	 *  Clear the libfreeradius error buffer.
+	 *	Clear the libfreeradius error buffer
 	 */
 	fr_strerror();
 
 	/*
-	 *  Initialise the state rbtree (used to link multiple rounds of challenges).
-	 */
-	state = fr_state_init(NULL);
-
-	/*
-	 *  Process requests until HUP or exit.
+	 *	Process requests until HUP or exit.
 	 */
 	while ((status = radius_event_process()) == 0x80) {
 #ifdef WITH_STATS
@@ -595,46 +592,45 @@ int main(int argc, char *argv[])
 		INFO("Exiting normally");
 	}
 
+	exec_trigger(NULL, NULL, "server.stop", false);
+
 	/*
-	 *  Ignore the TERM signal: we're about to die.
+	 *	Ignore the TERM signal: we're
+	 *	about to die.
 	 */
 	signal(SIGTERM, SIG_IGN);
 
 	/*
-	 *   Fire signal and stop triggers after ignoring SIGTERM, so handlers are
-	 *   not killed with the rest of the process group, below.
-	 */
-	if (status == 2) exec_trigger(NULL, NULL, "server.signal.term", true);
-	exec_trigger(NULL, NULL, "server.stop", false);
-
-	/*
-	 *  Send a TERM signal to all associated processes
-	 *  (including us, which gets ignored.)
+	 *	Send a TERM signal to all
+	 *	associated processes
+	 *	(including us, which gets
+	 *	ignored.)
 	 */
 #ifndef __MINGW32__
 	if (spawn_flag) kill(-radius_pid, SIGTERM);
 #endif
 
 	/*
-	 *  We're exiting, so we can delete the PID file.
-	 *  (If it doesn't exist, we can ignore the error returned by unlink)
+	 *	We're exiting, so we can delete the PID
+	 *	file.  (If it doesn't exist, we can ignore
+	 *	the error returned by unlink)
 	 */
-	if (main_config.daemonize) unlink(main_config.pid_file);
+	if (main_config.daemonize) {
+		unlink(main_config.pid_file);
+	}
 
 	radius_event_free();
 
 cleanup:
 	/*
-	 *  Detach any modules.
+	 *	Detach any modules.
 	 */
 	modules_free();
 
 	xlat_free();		/* modules may have xlat's */
 
-	fr_state_delete(state);
-
 	/*
-	 *  Free the configuration items.
+	 *	Free the configuration items.
 	 */
 	main_config_free();
 
@@ -647,7 +643,7 @@ cleanup:
 #endif
 
 	/*
-	 *  So we don't see autofreed memory in the talloc report
+	 *	So we don't see autofreed memory in the talloc report
 	 */
 	talloc_free(autofree);
 
@@ -667,7 +663,7 @@ static void NEVER_RETURNS usage(int status)
 {
 	FILE *output = status?stderr:stdout;
 
-	fprintf(output, "Usage: %s [options]\n", main_config.name);
+	fprintf(output, "Usage: %s [options]\n", progname);
 	fprintf(output, "Options:\n");
 	fprintf(output, "  -C            Check configuration and exit.\n");
 	fprintf(stderr, "  -d <raddb>    Set configuration directory (defaults to " RADDBDIR ").\n");
@@ -676,15 +672,15 @@ static void NEVER_RETURNS usage(int status)
 	fprintf(output, "  -h            Print this help message.\n");
 	fprintf(output, "  -i <ipaddr>   Listen on ipaddr ONLY.\n");
 	fprintf(output, "  -l <log_file> Logging output will be written to this file.\n");
-	fprintf(output, "  -m            On SIGINT or SIGQUIT clean up all used memory instead of just exiting.\n");
+	fprintf(output, "  -m            On SIGINT or SIGQUIT exit cleanly instead of immediately.\n");
 	fprintf(output, "  -n <name>     Read raddb/name.conf instead of raddb/radiusd.conf.\n");
 	fprintf(output, "  -p <port>     Listen on port ONLY.\n");
 	fprintf(output, "  -P            Always write out PID, even with -f.\n");
-	fprintf(output, "  -s            Do not spawn child processes to handle requests (same as -ft).\n");
+	fprintf(output, "  -s            Do not spawn child processes to handle requests.\n");
 	fprintf(output, "  -t            Disable threads.\n");
 	fprintf(output, "  -v            Print server version information.\n");
-	fprintf(output, "  -X            Turn on full debugging (similar to -tfxxl stdout).\n");
-	fprintf(output, "  -x            Turn on additional debugging (-xx gives more debugging).\n");
+	fprintf(output, "  -X            Turn on full debugging.\n");
+	fprintf(output, "  -x            Turn on additional debugging. (-xx gives more debugging).\n");
 	exit(status);
 }
 
@@ -696,7 +692,7 @@ static void sig_fatal(int sig)
 {
 	if (getpid() != radius_pid) _exit(sig);
 
-	switch (sig) {
+	switch(sig) {
 	case SIGTERM:
 		radius_signal_self(RADIUS_SIGNAL_SELF_TERM);
 		break;

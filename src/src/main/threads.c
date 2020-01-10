@@ -43,7 +43,6 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #include <mach/mach_init.h>
 #include <mach/semaphore.h>
 
-#ifndef WITH_GCD
 #undef sem_t
 #define sem_t semaphore_t
 #undef sem_init
@@ -52,8 +51,7 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #define sem_wait(s) semaphore_wait(*s)
 #undef sem_post
 #define sem_post(s) semaphore_signal(*s)
-#endif	/* WITH_GCD */
-#endif	/* __APPLE__ */
+#endif
 
 #ifdef HAVE_SYS_WAIT_H
 #include <sys/wait.h>
@@ -73,6 +71,7 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 
 #ifndef WITH_GCD
 #define SEMAPHORE_LOCKED	(0)
+#define SEMAPHORE_UNLOCKED	(1)
 
 #define THREAD_RUNNING		(1)
 #define THREAD_CANCELLED	(2)
@@ -97,13 +96,11 @@ typedef struct THREAD_HANDLE {
 
 #endif	/* WITH_GCD */
 
-#ifdef WNOHANG
 typedef struct thread_fork_t {
 	pid_t		pid;
 	int		status;
 	int		exited;
 } thread_fork_t;
-#endif
 
 
 #ifdef WITH_STATS
@@ -202,7 +199,7 @@ static const CONF_PARSER thread_config[] = {
 	{ "auto_limit_acct", FR_CONF_POINTER(PW_TYPE_BOOLEAN, &thread_pool.auto_limit_acct), NULL },
 #endif
 #endif
-	CONF_PARSER_TERMINATOR
+	{ NULL, -1, 0, NULL, NULL }
 };
 #endif
 
@@ -222,23 +219,11 @@ static const CONF_PARSER thread_config[] = {
 
 static pthread_mutex_t *ssl_mutexes = NULL;
 
-#ifdef HAVE_CRYPTO_SET_ID_CALLBACK
 static unsigned long ssl_id_function(void)
 {
-	unsigned long ret;
-	pthread_t thread = pthread_self();
-
-	if (sizeof(ret) >= sizeof(thread)) {
-		memcpy(&ret, &thread, sizeof(thread));
-	} else {
-		memcpy(&ret, &thread, sizeof(ret));
-	}
-
-	return ret;
+	return (unsigned long) pthread_self();
 }
-#endif
 
-#ifdef HAVE_CRYPTO_SET_LOCKING_CALLBACK
 static void ssl_locking_function(int mode, int n, UNUSED char const *file, UNUSED int line)
 {
 	if (mode & CRYPTO_LOCK) {
@@ -247,7 +232,6 @@ static void ssl_locking_function(int mode, int n, UNUSED char const *file, UNUSE
 		pthread_mutex_unlock(&(ssl_mutexes[n]));
 	}
 }
-#endif
 
 static int setup_ssl_mutexes(void)
 {
@@ -263,12 +247,8 @@ static int setup_ssl_mutexes(void)
 		pthread_mutex_init(&(ssl_mutexes[i]), NULL);
 	}
 
-#ifdef HAVE_CRYPTO_SET_ID_CALLBACK
 	CRYPTO_set_id_callback(ssl_id_function);
-#endif
-#ifdef HAVE_CRYPTO_SET_LOCKING_CALLBACK
 	CRYPTO_set_locking_callback(ssl_locking_function);
-#endif
 
 	return 1;
 }
@@ -474,9 +454,9 @@ static int request_dequeue(REQUEST **prequest)
 	time_t blocked;
 	static time_t last_complained = 0;
 	static time_t total_blocked = 0;
-	int num_blocked = 0;
+	int num_blocked;
 	RAD_LISTEN_TYPE i, start;
-	REQUEST *request = NULL;
+	REQUEST *request;
 	reap_children();
 
 	rad_assert(pool_initialized == true);
@@ -677,15 +657,15 @@ static void *request_handler_thread(void *arg)
 			VALUE_PAIR *vp;
 			REQUEST *request = self->request;
 
-			vp = radius_pair_create(request, &request->config,
+			vp = radius_paircreate(request, &request->config_items,
 					       181, VENDORPEC_FREERADIUS);
 			if (vp) vp->vp_integer = thread_pool.pps_in.pps;
 
-			vp = radius_pair_create(request, &request->config,
+			vp = radius_paircreate(request, &request->config_items,
 					       182, VENDORPEC_FREERADIUS);
 			if (vp) vp->vp_integer = thread_pool.pps_in.pps;
 
-			vp = radius_pair_create(request, &request->config,
+			vp = radius_paircreate(request, &request->config_items,
 					       183, VENDORPEC_FREERADIUS);
 			if (vp) {
 				vp->vp_integer = thread_pool.max_queue_size - thread_pool.num_queued;
@@ -726,11 +706,7 @@ static void *request_handler_thread(void *arg)
 	 *	must remove the thread's error queue before
 	 *	exiting to prevent memory leaks.
 	 */
-#if OPENSSL_VERSION_NUMBER < 0x10000000L
 	ERR_remove_state(0);
-#elif OPENSSL_VERSION_NUMBER < 0x10100000L || defined(LIBRESSL_VERSION_NUMBER)
-	ERR_remove_thread_state(NULL);
-#endif
 #endif
 
 	pthread_mutex_lock(&thread_pool.queue_mutex);
@@ -900,13 +876,13 @@ static int pid_cmp(void const *one, void const *two)
  *
  *	FIXME: What to do on a SIGHUP???
  */
-int thread_pool_init(CONF_SECTION *cs, bool *spawn_flag)
+int thread_pool_init(UNUSED CONF_SECTION *cs, bool *spawn_flag)
 {
 #ifndef WITH_GCD
 	uint32_t	i;
 	int		rcode;
-#endif
 	CONF_SECTION	*pool_cf;
+#endif
 	time_t		now;
 
 	now = time(NULL);
@@ -915,10 +891,8 @@ int thread_pool_init(CONF_SECTION *cs, bool *spawn_flag)
 	rad_assert(*spawn_flag == true);
 	rad_assert(pool_initialized == false); /* not called on HUP */
 
+#ifndef WITH_GCD
 	pool_cf = cf_subsection_find_next(cs, NULL, "thread");
-#ifdef WITH_GCD
-	if (pool_cf) WARN("Built with Grand Central Dispatch.  Ignoring 'thread' subsection");
-#else
 	if (!pool_cf) *spawn_flag = false;
 #endif
 
@@ -1020,7 +994,7 @@ int thread_pool_init(CONF_SECTION *cs, bool *spawn_flag)
 	 *	Allocate multiple fifos.
 	 */
 	for (i = 0; i < RAD_LISTEN_MAX; i++) {
-		thread_pool.fifo[i] = fr_fifo_create(NULL, thread_pool.max_queue_size, NULL);
+		thread_pool.fifo[i] = fr_fifo_create(thread_pool.max_queue_size, NULL);
 		if (!thread_pool.fifo[i]) {
 			ERROR("FATAL: Failed to set up request fifo");
 			return -1;
@@ -1099,30 +1073,6 @@ void thread_pool_stop(void)
 		pthread_join(handle->pthread_id, NULL);
 		delete_thread(handle);
 	}
-
-	for (i = 0; i < RAD_LISTEN_MAX; i++) {
-		fr_fifo_free(thread_pool.fifo[i]);
-	}
-
-#ifdef WNOHANG
-	fr_hash_table_free(thread_pool.waiters);
-#endif
-
-#ifdef HAVE_OPENSSL_CRYPTO_H
-	/*
-	 *	We're no longer threaded.  Remove the mutexes and free
-	 *	the memory.
-	 */
-#ifdef HAVE_CRYPTO_SET_ID_CALLBACK
-	CRYPTO_set_id_callback(NULL);
-#endif
-#ifdef HAVE_CRYPTO_SET_LOCKING_CALLBACK
-	CRYPTO_set_locking_callback(NULL);
-#endif
-
-	free(ssl_mutexes);
-#endif
-
 #endif
 }
 
@@ -1183,7 +1133,7 @@ static void thread_pool_manage(time_t now)
 	 */
 	active_threads = thread_pool.active_threads;
 	spare = thread_pool.total_threads - active_threads;
-	if (rad_debug_lvl) {
+	if (debug_flag) {
 		static uint32_t old_total = 0;
 		static uint32_t old_active = 0;
 
@@ -1433,7 +1383,6 @@ void exec_trigger(REQUEST *request, CONF_SECTION *cs, char const *name, int quen
 	char const *attr;
 	char const *value;
 	VALUE_PAIR *vp;
-	bool alloc = false;
 
 	/*
 	 *	Use global "trigger" section if no local config is given.
@@ -1477,7 +1426,7 @@ void exec_trigger(REQUEST *request, CONF_SECTION *cs, char const *name, int quen
 		return;
 	}
 
-	cp = cf_item_to_pair(ci);
+	cp = cf_itemtopair(ci);
 	if (!cp) return;
 
 	value = cf_pair_value(cp);
@@ -1520,17 +1469,6 @@ void exec_trigger(REQUEST *request, CONF_SECTION *cs, char const *name, int quen
 		}
 	}
 
-	/*
-	 *	radius_exec_program always needs a request.
-	 */
-	if (!request) {
-		request = request_alloc(NULL);
-		alloc = true;
-	}
-
 	DEBUG("Trigger %s -> %s", name, value);
-
-	radius_exec_program(request, NULL, 0, NULL, request, value, vp, false, true, EXEC_TIMEOUT);
-
-	if (alloc) talloc_free(request);
+	radius_exec_program(request, value, false, true, NULL, 0, EXEC_TIMEOUT, vp, NULL);
 }

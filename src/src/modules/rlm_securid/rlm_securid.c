@@ -1,8 +1,7 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version.
+ *   it under the terms of the GNU General Public License, version 2 if the
+ *   License as published by the Free Software Foundation.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -44,7 +43,7 @@ static const CONF_PARSER module_config[] = {
 	{ "max_sessions", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_securid_t, max_sessions), "2048" },
 	{ "max_trips_per_session", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_securid_t, max_trips_per_session), NULL },
 	{ "max_round_trips", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_securid_t, max_trips_per_session), "6" },
-	CONF_PARSER_TERMINATOR
+	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
 
@@ -484,7 +483,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	/*
 	 *	The user MUST supply a non-zero-length password.
 	 */
-	if (request->password->vp_length == 0) {
+	if (request->password->length == 0) {
 		REDEBUG("Password should not be empty");
 		return RLM_MODULE_INVALID;
 	}
@@ -513,11 +512,11 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		/* reply with Access-challenge message code (11) */
 
 		/* Generate Prompt attribute */
-		vp = fr_pair_afrom_num(request->reply, PW_PROMPT, 0);
+		vp = paircreate(request->reply, PW_PROMPT, 0);
 
 		rad_assert(vp != NULL);
 		vp->vp_integer = 0; /* no echo */
-		fr_pair_add(&request->reply->vps, vp);
+		pairadd(&request->reply->vps, vp);
 
 		/* Mark the packet as a Acceess-Challenge Packet */
 		request->reply->code = PW_CODE_ACCESS_CHALLENGE;
@@ -533,7 +532,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		break;
 	}
 
-	if (*buffer) pair_make_reply("Reply-Message", buffer, T_OP_EQ);
+	if (*buffer) pairmake_reply("Reply-Message", buffer, T_OP_EQ);
 
 	return rcode;
 }
@@ -548,16 +547,22 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
-extern module_t rlm_securid;
 module_t rlm_securid = {
-	.magic		= RLM_MODULE_INIT,
-	.name		= "securid",
-	.type		= RLM_TYPE_HUP_SAFE,
-	.inst_size	= sizeof(rlm_securid_t),
-	.config		= module_config,
-	.instantiate	= mod_instantiate,
-	.detach		= mod_detach,
-	.methods = {
-		[MOD_AUTHENTICATE]	= mod_authenticate
+	RLM_MODULE_INIT,
+	"securid",
+	RLM_TYPE_HUP_SAFE,   	/* type */
+	sizeof(rlm_securid_t),
+	module_config,
+	mod_instantiate, 		/* instantiation */
+	mod_detach, 			/* detach */
+	{
+		mod_authenticate, 	/* authentication */
+		NULL, 			/* authorization */
+		NULL, 			/* preaccounting */
+		NULL, 			/* accounting */
+		NULL, 			/* checksimul */
+		NULL, 			/* pre-proxy */
+		NULL, 			/* post-proxy */
+		NULL			/* post-auth */
 	},
 };

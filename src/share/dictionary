@@ -1,5 +1,5 @@
 # -*- text -*-
-# Copyright (C) 2015 The FreeRADIUS Server project and contributors
+# Copyright (C) 2011 The FreeRADIUS Server project and contributors
 #
 # Version $Id$
 #
@@ -111,10 +111,7 @@ $INCLUDE dictionary.rfc6911
 $INCLUDE dictionary.rfc6929
 $INCLUDE dictionary.rfc6930
 $INCLUDE dictionary.rfc7055
-$INCLUDE dictionary.rfc7155
 $INCLUDE dictionary.rfc7268
-$INCLUDE dictionary.rfc7499
-$INCLUDE dictionary.rfc7930
 
 #
 #	Mostly values which have been allocated by IANA under
@@ -131,7 +128,6 @@ $INCLUDE dictionary.3gpp2
 $INCLUDE dictionary.acc
 $INCLUDE dictionary.acme
 $INCLUDE dictionary.actelis
-$INCLUDE dictionary.adtran
 $INCLUDE dictionary.airespace
 $INCLUDE dictionary.alcatel
 $INCLUDE dictionary.alcatel.sr
@@ -139,16 +135,12 @@ $INCLUDE dictionary.alcatel-lucent.aaa
 $INCLUDE dictionary.alteon
 $INCLUDE dictionary.alvarion
 $INCLUDE dictionary.apc
-$INCLUDE dictionary.aptilo
-$INCLUDE dictionary.arbor
-$INCLUDE dictionary.arista
 $INCLUDE dictionary.aruba
 $INCLUDE dictionary.azaire
 $INCLUDE dictionary.ascend
 $INCLUDE dictionary.bay
 $INCLUDE dictionary.bintec
 $INCLUDE dictionary.bluecoat
-$INCLUDE dictionary.boingo
 $INCLUDE dictionary.broadsoft
 $INCLUDE dictionary.brocade
 $INCLUDE dictionary.bskyb
@@ -156,7 +148,6 @@ $INCLUDE dictionary.bt
 $INCLUDE dictionary.cablelabs
 $INCLUDE dictionary.cabletron
 $INCLUDE dictionary.camiant
-$INCLUDE dictionary.checkpoint
 $INCLUDE dictionary.chillispot
 $INCLUDE dictionary.cisco
 $INCLUDE dictionary.cisco.asa
@@ -171,7 +162,6 @@ $INCLUDE dictionary.cisco.vpn5000
 $INCLUDE dictionary.cisco.bbsm
 $INCLUDE dictionary.citrix
 $INCLUDE dictionary.clavister
-$INCLUDE dictionary.cnergee
 $INCLUDE dictionary.colubris
 $INCLUDE dictionary.compatible
 $INCLUDE dictionary.cosine
@@ -185,7 +175,6 @@ $INCLUDE dictionary.epygi
 $INCLUDE dictionary.erx
 $INCLUDE dictionary.equallogic
 $INCLUDE dictionary.ericsson
-$INCLUDE dictionary.ericsson.ab
 $INCLUDE dictionary.ericsson.packet.core.networks
 $INCLUDE dictionary.extreme
 $INCLUDE dictionary.f5
@@ -197,7 +186,6 @@ $INCLUDE dictionary.foundry
 $INCLUDE dictionary.gandalf
 $INCLUDE dictionary.gemtek
 $INCLUDE dictionary.h3c
-$INCLUDE dictionary.hillstone
 $INCLUDE dictionary.hp
 $INCLUDE dictionary.huawei
 $INCLUDE dictionary.iea
@@ -209,16 +197,12 @@ $INCLUDE dictionary.juniper
 $INCLUDE dictionary.karlnet
 $INCLUDE dictionary.kineto
 $INCLUDE dictionary.lancom
-$INCLUDE dictionary.lantronix
 $INCLUDE dictionary.livingston
 $INCLUDE dictionary.localweb
 $INCLUDE dictionary.lucent
 $INCLUDE dictionary.manzara
-$INCLUDE dictionary.meinberg
-$INCLUDE dictionary.meraki
 $INCLUDE dictionary.merit
 $INCLUDE dictionary.meru
-$INCLUDE dictionary.microsemi
 $INCLUDE dictionary.microsoft
 $INCLUDE dictionary.mikrotik
 $INCLUDE dictionary.motorola
@@ -242,20 +226,18 @@ $INCLUDE dictionary.nortel
 $INCLUDE dictionary.packeteer
 $INCLUDE dictionary.paloalto
 $INCLUDE dictionary.patton
-$INCLUDE dictionary.perle
 $INCLUDE dictionary.propel
 $INCLUDE dictionary.prosoft
 $INCLUDE dictionary.proxim
 $INCLUDE dictionary.purewave
 $INCLUDE dictionary.quiconnect
 $INCLUDE dictionary.quintum
+$INCLUDE dictionary.redback
 $INCLUDE dictionary.redcreek
 $INCLUDE dictionary.riverbed
 $INCLUDE dictionary.riverstone
 $INCLUDE dictionary.roaringpenguin
-$INCLUDE dictionary.ruggedcom
 $INCLUDE dictionary.ruckus
-$INCLUDE dictionary.sangoma
 $INCLUDE dictionary.shasta
 $INCLUDE dictionary.sg
 $INCLUDE dictionary.shiva
@@ -269,7 +251,6 @@ $INCLUDE dictionary.symbol
 $INCLUDE dictionary.telebit
 $INCLUDE dictionary.terena
 $INCLUDE dictionary.trapeze
-$INCLUDE dictionary.travelping
 $INCLUDE dictionary.tropos
 $INCLUDE dictionary.t_systems_nova
 $INCLUDE dictionary.ukerna
@@ -281,7 +262,6 @@ $INCLUDE dictionary.versanet
 $INCLUDE dictionary.waverider
 $INCLUDE dictionary.walabi
 $INCLUDE dictionary.wichorus
-$INCLUDE dictionary.wifialliance
 $INCLUDE dictionary.wimax
 $INCLUDE dictionary.wispr
 $INCLUDE dictionary.xedia

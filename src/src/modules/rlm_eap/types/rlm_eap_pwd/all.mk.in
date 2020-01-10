@@ -1,9 +1,7 @@
 TARGETNAME	:= @targetname@
 
-ifneq "$(OPENSSL_LIBS)" ""
 ifneq "$(TARGETNAME)" ""
 TARGET		:= $(TARGETNAME).a
-endif
 endif
 
 SOURCES		:= $(TARGETNAME).c eap_pwd.c

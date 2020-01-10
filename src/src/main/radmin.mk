@@ -1,6 +1,6 @@
 TARGET 		:= radmin
 
-SOURCES		:= radmin.c channel.c
+SOURCES		:= radmin.c
 
 TGT_INSTALLDIR  := ${sbindir}
 TGT_PREREQS	:= libfreeradius-server.a libfreeradius-radius.a

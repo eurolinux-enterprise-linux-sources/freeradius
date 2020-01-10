@@ -78,20 +78,16 @@ int otp_pw_valid(REQUEST *request, int pwe, char const *challenge,
 	char const	*username = request->username->vp_strvalue;
 	int		rc;
 
-	otp_request.version = 2;
-
-	if (strlcpy(otp_request.username, username,
-			sizeof(otp_request.username)) >=
-		sizeof(otp_request.username)) {
+	if (request->username->length > OTP_MAX_USERNAME_LEN) {
 		AUTH("rlm_otp: username [%s] too long", username);
 		return RLM_MODULE_REJECT;
 	}
-	if (strlcpy(otp_request.challenge, challenge,
-			sizeof(otp_request.challenge)) >=
-		sizeof(otp_request.challenge)) {
-		AUTH("rlm_otp: challenge for [%s] too long", username);
-		return RLM_MODULE_REJECT;
-	}
+
+	/* we already know challenge is short enough */
+	otp_request.version = 2;
+
+	strcpy(otp_request.username, username);
+	strcpy(otp_request.challenge, challenge);
 
 	otp_request.pwe.pwe = pwe;
 
@@ -99,10 +95,10 @@ int otp_pw_valid(REQUEST *request, int pwe, char const *challenge,
 	 *	otp_pwe_present() (done by caller) guarantees that both of
 	 *	these exist
 	 */
-	cvp = fr_pair_find_by_num(request->packet->vps, pwattr[pwe - 1]->attr,
+	cvp = pairfind(request->packet->vps, pwattr[pwe - 1]->attr,
 		       pwattr[pwe - 1]->vendor, TAG_ANY);
 
-	rvp = fr_pair_find_by_num(request->packet->vps, pwattr[pwe]->attr,
+	rvp = pairfind(request->packet->vps, pwattr[pwe]->attr,
 		       pwattr[pwe]->vendor, TAG_ANY);
 
 	/* this is just to quiet Coverity */
@@ -115,29 +111,26 @@ int otp_pw_valid(REQUEST *request, int pwe, char const *challenge,
 	 *	Unfortunately (?) otpd must do this also.
 	 */
 	switch (otp_request.pwe.pwe) {
-	case PWE_NONE:
-		return RLM_MODULE_NOOP;
-
 	case PWE_PAP:
-		if (strlcpy(otp_request.pwe.u.pap.passcode, rvp->vp_strvalue,
-				sizeof(otp_request.pwe.u.pap.passcode)) >=
-			sizeof(otp_request.pwe.u.pap.passcode)) {
+		if (rvp->length >= sizeof(otp_request.pwe.u.pap.passcode)) {
 			AUTH("rlm_otp: passcode for [%s] too long",
 			       username);
 
 			return RLM_MODULE_REJECT;
 		}
+
+		(void) strcpy(otp_request.pwe.u.pap.passcode, rvp->vp_strvalue);
 		break;
 
 	case PWE_CHAP:
-		if (cvp->vp_length > 16) {
+		if (cvp->length > 16) {
 			AUTH("rlm_otp: CHAP challenge for [%s] "
 			       "too long", username);
 
 			return RLM_MODULE_INVALID;
 		}
 
-		if (rvp->vp_length != 17) {
+		if (rvp->length != 17) {
 			AUTH("rlm_otp: CHAP response for [%s] "
 			      "wrong size", username);
 
@@ -145,49 +138,49 @@ int otp_pw_valid(REQUEST *request, int pwe, char const *challenge,
 		}
 
 		(void) memcpy(otp_request.pwe.u.chap.challenge, cvp->vp_octets,
-			      cvp->vp_length);
+			      cvp->length);
 
-		otp_request.pwe.u.chap.clen = cvp->vp_length;
+		otp_request.pwe.u.chap.clen = cvp->length;
 		(void) memcpy(otp_request.pwe.u.chap.response, rvp->vp_octets,
-			      rvp->vp_length);
+			      rvp->length);
 
-		otp_request.pwe.u.chap.rlen = rvp->vp_length;
+		otp_request.pwe.u.chap.rlen = rvp->length;
 		break;
 
 	case PWE_MSCHAP:
-		if (cvp->vp_length != 8) {
+		if (cvp->length != 8) {
 			AUTH("rlm_otp: MS-CHAP challenge for "
 			       "[%s] wrong size", username);
 
 			return RLM_MODULE_INVALID;
 		}
 
-		if (rvp->vp_length != 50) {
+		if (rvp->length != 50) {
 			AUTH("rlm_otp: MS-CHAP response for [%s] "
 			       "wrong size", username);
 
 			return RLM_MODULE_INVALID;
 		}
 		(void) memcpy(otp_request.pwe.u.chap.challenge,
-			      cvp->vp_octets, cvp->vp_length);
+			      cvp->vp_octets, cvp->length);
 
-		otp_request.pwe.u.chap.clen = cvp->vp_length;
+		otp_request.pwe.u.chap.clen = cvp->length;
 
 		(void) memcpy(otp_request.pwe.u.chap.response,
-			      rvp->vp_octets, rvp->vp_length);
+			      rvp->vp_octets, rvp->length);
 
-		otp_request.pwe.u.chap.rlen = rvp->vp_length;
+		otp_request.pwe.u.chap.rlen = rvp->length;
 		break;
 
 	case PWE_MSCHAP2:
-		if (cvp->vp_length != 16) {
+		if (cvp->length != 16) {
 			AUTH("rlm_otp: MS-CHAP2 challenge for "
 				      "[%s] wrong size", username);
 
 			return RLM_MODULE_INVALID;
 		}
 
-		if (rvp->vp_length != 50) {
+		if (rvp->length != 50) {
 			AUTH("rlm_otp: MS-CHAP2 response for [%s] "
 			       "wrong size", username);
 
@@ -195,13 +188,13 @@ int otp_pw_valid(REQUEST *request, int pwe, char const *challenge,
 		}
 
 		(void) memcpy(otp_request.pwe.u.chap.challenge, cvp->vp_octets,
-			      cvp->vp_length);
+			      cvp->length);
 
-		otp_request.pwe.u.chap.clen = cvp->vp_length;
+		otp_request.pwe.u.chap.clen = cvp->length;
 
 		(void) memcpy(otp_request.pwe.u.chap.response, rvp->vp_octets,
-			      rvp->vp_length);
-		otp_request.pwe.u.chap.rlen = rvp->vp_length;
+			      rvp->length);
+		otp_request.pwe.u.chap.rlen = rvp->length;
 		break;
 	} /* switch (otp_request.pwe.pwe) */
 

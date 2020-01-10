@@ -17,37 +17,10 @@ debug_request {
 }
 
 #
-#  Outputs the contents of the coa list in debugging (-X) mode
-#
-debug_coa {
-	if("%{debug_attr:coa:}" == '') {
-		noop
-	}
-}
-
-#
 #  Outputs the contents of the reply list in debugging (-X) mode
 #
 debug_reply {
 	if("%{debug_attr:reply:}" == '') {
-		noop
-	}
-}
-
-#
-#  Outputs the contents of the session state list in debugging (-X) mode
-#
-debug_session_state {
-	if("%{debug_attr:session-state:}" == '') {
-		noop
-	}
-}
-
-#
-#  Outputs the contents of the proxy-request state list in debugging (-X) mode
-#
-debug_proxy_request {
-	if("%{debug_attr:proxy-request:}" == '') {
 		noop
 	}
 }
@@ -58,7 +31,5 @@ debug_proxy_request {
 debug_all {
 	debug_control
 	debug_request
-	debug_coa
 	debug_reply
-	debug_session_state
 }

@@ -1,8 +1,7 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version.
+ *   it under the terms of the GNU General Public License, version 2 if the
+ *   License as published by the Free Software Foundation.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -42,9 +41,6 @@ RCSID("$Id$")
  */
 #undef HAVE_CRYPT
 
-#ifdef __clang__
-DIAG_OFF(disabled-macro-expansion)
-#endif
 #include <ruby.h>
 
 /*
@@ -90,7 +86,7 @@ typedef struct rlm_ruby_t {
 static const CONF_PARSER module_config[] = {
 	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_REQUIRED, struct rlm_ruby_t, filename), NULL },
 	{ "module", FR_CONF_OFFSET(PW_TYPE_STRING, struct rlm_ruby_t, module_name), "Radiusd" },
-	CONF_PARSER_TERMINATOR
+	{ NULL, -1, 0, NULL, NULL } /* end of module_config */
 };
 
 
@@ -155,7 +151,7 @@ static void add_vp_tuple(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **vpp, VA
 
 					char const *s1, *s2;
 
-					/* fr_pair_make() will convert and find any
+					/* pairmake() will convert and find any
 					 * errors in the pair.
 					 */
 
@@ -167,7 +163,7 @@ static void add_vp_tuple(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **vpp, VA
 						       function_name, s1, s2);
 
 						/* xxx Might need to support other T_OP */
-						vp = fr_pair_make(ctx, vpp, s1, s2, T_OP_EQ);
+						vp = pairmake(ctx, vpp, s1, s2, T_OP_EQ);
 						if (vp != NULL) {
 							DEBUG("%s: s1, s2 OK", function_name);
 						} else {
@@ -205,7 +201,7 @@ static rlm_rcode_t CC_HINT(nonnull (4)) do_ruby(REQUEST *request, unsigned long 
 	char buf[BUF_SIZE]; /* same size as vp_print buffer */
 
 	VALUE_PAIR *vp;
-	VALUE rb_request, rb_result, rb_reply_items, rb_config, rbString1, rbString2;
+	VALUE rb_request, rb_result, rb_reply_items, rb_config_items, rbString1, rbString2;
 
 	int n_tuple;
 	DEBUG("Calling ruby function %s which has id: %lu\n", function_name, func);
@@ -277,12 +273,12 @@ static rlm_rcode_t CC_HINT(nonnull (4)) do_ruby(REQUEST *request, unsigned long 
 		 */
 		if (request) {
 			rb_reply_items = rb_ary_entry(rb_result, 1);
-			rb_config = rb_ary_entry(rb_result, 2);
+			rb_config_items = rb_ary_entry(rb_result, 2);
 
 			add_vp_tuple(request->reply, request, &request->reply->vps,
 				     rb_reply_items, function_name);
-			add_vp_tuple(request, request, &request->config,
-				     rb_config, function_name);
+			add_vp_tuple(request, request, &request->config_items,
+				     rb_config_items, function_name);
 		}
 	} else if (FIXNUM_P(rb_result)) {
 		rcode = FIX2INT(rb_result);
@@ -455,27 +451,26 @@ static int mod_detach(UNUSED void *instance)
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
-extern module_t rlm_ruby;
 module_t rlm_ruby = {
-	.magic		= RLM_MODULE_INIT,
-	.name		= "ruby",
-	.type		= RLM_TYPE_THREAD_UNSAFE, /* type, ok, let's be honest, MRI is not yet treadsafe */
-	.inst_size	= sizeof(rlm_ruby_t),
-	.config		= module_config,
-	.instantiate	= mod_instantiate,
-	.detach		= mod_detach,
-	.methods = {
-		[MOD_AUTHENTICATE]	= mod_authenticate,
-		[MOD_AUTHORIZE]		= mod_authorize,
-		[MOD_PREACCT]		= mod_preacct,
-		[MOD_ACCOUNTING]	= mod_accounting,
-		[MOD_SESSION]		= mod_checksimul,
-		[MOD_PRE_PROXY]		= mod_pre_proxy,
-		[MOD_POST_PROXY]	= mod_post_proxy,
-		[MOD_POST_AUTH]		= mod_post_auth,
+	RLM_MODULE_INIT,
+	"ruby",
+	RLM_TYPE_THREAD_UNSAFE, /* type, ok, let's be honest, MRI is not yet treadsafe */
+	sizeof(rlm_ruby_t),
+	module_config,
+	mod_instantiate,		/* instantiation */
+	mod_detach,			/* detach */
+	{
+		mod_authenticate,	/* authentication */
+		mod_authorize,		/* authorization */
+		mod_preacct,		/* preaccounting */
+		mod_accounting,		/* accounting */
+		mod_checksimul,		/* checksimul */
+		mod_pre_proxy,		/* pre-proxy */
+		mod_post_proxy,		/* post-proxy */
+		mod_post_auth		/* post-auth */
 #ifdef WITH_COA
-		[MOD_RECV_COA]		= mod_recv_coa,
-		[MOD_SEND_COA]		= mod_send_coa
+		, mod_recv_coa,
+		mod_send_coa
 #endif
 	},
 };

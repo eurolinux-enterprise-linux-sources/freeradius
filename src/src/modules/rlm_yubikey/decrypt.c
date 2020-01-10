@@ -13,7 +13,6 @@
 /** Decrypt a Yubikey OTP AES block
  *
  * @param inst Module configuration.
- * @param request The current request.
  * @param passcode string to decrypt.
  * @return one of the RLM_RCODE_* constants.
  */
@@ -33,14 +32,14 @@ rlm_rcode_t rlm_yubikey_decrypt(rlm_yubikey_t *inst, REQUEST *request, char cons
 		return RLM_MODULE_FAIL;
 	}
 
-	key = fr_pair_find_by_da(request->config, da, TAG_ANY);
+	key = pairfind(request->config_items, da->attr, da->vendor, TAG_ANY);
 	if (!key) {
 		REDEBUG("Yubikey-Key attribute not found in control list, can't decrypt OTP data");
 		return RLM_MODULE_INVALID;
 	}
 
-	if (key->vp_length != YUBIKEY_KEY_SIZE) {
-		REDEBUG("Yubikey-Key length incorrect, expected %u got %zu", YUBIKEY_KEY_SIZE, key->vp_length);
+	if (key->length != YUBIKEY_KEY_SIZE) {
+		REDEBUG("Yubikey-Key length incorrect, expected %u got %zu", YUBIKEY_KEY_SIZE, key->length);
 		return RLM_MODULE_INVALID;
 	}
 
@@ -56,7 +55,7 @@ rlm_rcode_t rlm_yubikey_decrypt(rlm_yubikey_t *inst, REQUEST *request, char cons
 
 	RDEBUG("Token data decrypted successfully");
 
-	if (RDEBUG_ENABLED2) {
+	if (request->log.lvl && request->log.func) {
 		(void) fr_bin2hex((char *) &private_id, (uint8_t*) &token.uid, YUBIKEY_UID_SIZE);
 		RDEBUG2("Private ID	: 0x%s", private_id);
 		RDEBUG2("Session counter   : %u", yubikey_counter(token.ctr));
@@ -70,37 +69,37 @@ rlm_rcode_t rlm_yubikey_decrypt(rlm_yubikey_t *inst, REQUEST *request, char cons
 	/*
 	 *	Private ID used for validation purposes
 	 */
-	vp = fr_pair_make(request, &request->packet->vps, "Yubikey-Private-ID", NULL, T_OP_SET);
+	vp = pairmake(request, &request->packet->vps, "Yubikey-Private-ID", NULL, T_OP_SET);
 	if (!vp) {
 		REDEBUG("Failed creating Yubikey-Private-ID");
 
 		return RLM_MODULE_FAIL;
 	}
-	fr_pair_value_memcpy(vp, token.uid, YUBIKEY_UID_SIZE);
+	pairmemcpy(vp, token.uid, YUBIKEY_UID_SIZE);
 
 	/*
 	 *	Token timestamp
 	 */
-	vp = fr_pair_make(request, &request->packet->vps, "Yubikey-Timestamp", NULL, T_OP_SET);
+	vp = pairmake(request, &request->packet->vps, "Yubikey-Timestamp", NULL, T_OP_SET);
 	if (!vp) {
 		REDEBUG("Failed creating Yubikey-Timestamp");
 
 		return RLM_MODULE_FAIL;
 	}
 	vp->vp_integer = (token.tstph << 16) | token.tstpl;
-	vp->vp_length = 4;
+	vp->length = 4;
 
 	/*
 	 *	Token random
 	 */
-	vp = fr_pair_make(request, &request->packet->vps, "Yubikey-Random", NULL, T_OP_SET);
+	vp = pairmake(request, &request->packet->vps, "Yubikey-Random", NULL, T_OP_SET);
 	if (!vp) {
 		REDEBUG("Failed creating Yubikey-Random");
 
 		return RLM_MODULE_FAIL;
 	}
 	vp->vp_integer = token.rnd;
-	vp->vp_length = 4;
+	vp->length = 4;
 
 	/*
 	 *	Combine the two counter fields together so we can do
@@ -108,19 +107,19 @@ rlm_rcode_t rlm_yubikey_decrypt(rlm_yubikey_t *inst, REQUEST *request, char cons
 	 */
 	counter = (yubikey_counter(token.ctr) << 16) | token.use;
 
-	vp = fr_pair_make(request, &request->packet->vps, "Yubikey-Counter", NULL, T_OP_SET);
+	vp = pairmake(request, &request->packet->vps, "Yubikey-Counter", NULL, T_OP_SET);
 	if (!vp) {
 		REDEBUG("Failed creating Yubikey-Counter");
 
 		return RLM_MODULE_FAIL;
 	}
 	vp->vp_integer = counter;
-	vp->vp_length = 4;
+	vp->length = 4;
 
 	/*
 	 *	Now we check for replay attacks
 	 */
-	vp = fr_pair_find_by_da(request->config, da, TAG_ANY);
+	vp = pairfind(request->config_items, vp->da->attr, vp->da->vendor, TAG_ANY);
 	if (!vp) {
 		RWDEBUG("Yubikey-Counter not found in control list, skipping replay attack checks");
 		return RLM_MODULE_OK;

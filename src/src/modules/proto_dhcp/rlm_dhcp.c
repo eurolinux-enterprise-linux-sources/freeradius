@@ -1,8 +1,7 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version.
+ *   it under the terms of the GNU General Public License, version 2 if the
+ *   License as published by the Free Software Foundation.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -51,57 +50,34 @@ typedef struct rlm_dhcp_t {
 static ssize_t dhcp_options_xlat(UNUSED void *instance, REQUEST *request,
 				 char const *fmt, char *out, size_t freespace)
 {
-	vp_cursor_t	cursor, src_cursor;
-	vp_tmpl_t	src;
-	VALUE_PAIR	*vp, *head = NULL;
-	int		decoded = 0;
-	ssize_t		slen;
+	vp_cursor_t cursor;
+	VALUE_PAIR *vp, *head = NULL;
+	int decoded = 0;
 
 	while (isspace((int) *fmt)) fmt++;
 
-	slen = tmpl_from_attr_str(&src, fmt, REQUEST_CURRENT, PAIR_LIST_REQUEST, false, false);
-	if (slen <= 0) {
-		REMARKER(fmt, slen, fr_strerror());
-	error:
+	if ((radius_get_vp(&vp, request, fmt) < 0) || !vp) {
+		 *out = '\0';
+		 return 0;
+	}
+
+	if ((fr_dhcp_decode_options(&head, request->packet, vp->vp_octets, vp->length) < 0) || (!head)) {
+		RWDEBUG("DHCP option decoding failed: %s", fr_strerror());
 		*out = '\0';
 		return -1;
 	}
 
-	if (src.type != TMPL_TYPE_ATTR) {
-		REDEBUG("dhcp_options cannot operate on a %s", fr_int2str(tmpl_names, src.type, "<INVALID>"));
-		goto error;
-	}
 
-	if (src.tmpl_da->type != PW_TYPE_OCTETS) {
-		REDEBUG("dhcp_options got a %s attribute needed octets",
-			fr_int2str(dict_attr_types, src.tmpl_da->type, "<INVALID>"));
-		goto error;
-	}
-
-	for (vp = tmpl_cursor_init(NULL, &src_cursor, request, &src);
+	for (vp = fr_cursor_init(&cursor, &head);
 	     vp;
-	     vp = tmpl_cursor_next(&src_cursor, &src)) {
-		/*
-		 *	@fixme: we should pass in a cursor, then decoding multiple
-		 *	source attributes can be made atomic.
-		 */
-		if ((fr_dhcp_decode_options(request->packet, &head, vp->vp_octets, vp->vp_length) < 0) || (!head)) {
-			RWDEBUG("DHCP option decoding failed: %s", fr_strerror());
-			goto error;
-		}
-
-		for (vp = fr_cursor_init(&cursor, &head);
-		     vp;
-		     vp = fr_cursor_next(&cursor)) {
-			rdebug_pair(L_DBG_LVL_2, request, vp, "dhcp_options: ");
-			decoded++;
-		}
-
-		fr_pair_list_move(request->packet, &(request->packet->vps), &head);
-
-		/* Free any unmoved pairs */
-		fr_pair_list_free(&head);
+	     vp = fr_cursor_next(&cursor)) {
+		decoded++;
 	}
+
+	pairmove(request->packet, &(request->packet->vps), &head);
+
+	/* Free any unmoved pairs */
+	pairfree(&head);
 
 	snprintf(out, freespace, "%i", decoded);
 
@@ -123,7 +99,7 @@ static ssize_t dhcp_xlat(UNUSED void *instance, REQUEST *request, char const *fm
 	}
 	fr_cursor_init(&cursor, &vp);
 
-	len = fr_dhcp_encode_option(request, binbuf, sizeof(binbuf), &cursor);
+	len = fr_dhcp_encode_option(binbuf, sizeof(binbuf), request, &cursor);
 	talloc_free(vp);
 	if (len <= 0) {
 		REDEBUG("DHCP option encoding failed: %s", fr_strerror());
@@ -141,11 +117,22 @@ static ssize_t dhcp_xlat(UNUSED void *instance, REQUEST *request, char const *fm
 	return fr_bin2hex(out, binbuf, len);
 }
 
+/*
+ *	Only free memory we allocated.  The strings allocated via
+ *	cf_section_parse() do not need to be freed.
+ */
+static int mod_detach(void *instance)
+{
+	xlat_unregister("dhcp_options", dhcp_options_xlat, instance);
+	xlat_unregister("dhcp", dhcp_xlat, instance);
+	return 0;
+}
+
 
 /*
  *	Instantiate the module.
  */
-static int mod_bootstrap(UNUSED CONF_SECTION *conf, void *instance)
+static int mod_instantiate(UNUSED CONF_SECTION *conf, void *instance)
 {
 	rlm_dhcp_t *inst = instance;
 	DICT_ATTR const *da;
@@ -190,10 +177,22 @@ static int mod_bootstrap(UNUSED CONF_SECTION *conf, void *instance)
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
-extern module_t rlm_dhcp;
 module_t rlm_dhcp = {
-	.magic		= RLM_MODULE_INIT,
-	.name		= "dhcp",
-	.inst_size	= sizeof(rlm_dhcp_t),
-	.bootstrap	= mod_bootstrap,
+	RLM_MODULE_INIT,
+	"dhcp",
+	0,				/* type */
+	sizeof(rlm_dhcp_t),
+	NULL,				/* CONF_PARSER */
+	mod_instantiate,		/* instantiation */
+	mod_detach,			/* detach */
+	{
+		NULL,			/* authentication */
+		NULL,			/* authorization */
+		NULL,			/* preaccounting */
+		NULL,			/* accounting */
+		NULL,			/* checksimul */
+		NULL,			/* pre-proxy */
+		NULL,		 	/* post-proxy */
+		NULL,			/* post-auth */
+	},
 };

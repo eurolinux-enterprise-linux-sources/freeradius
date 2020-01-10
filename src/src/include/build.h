@@ -1,4 +1,4 @@
-/**
+/*
  * $Id$
  *
  * @brief Source control functions
@@ -10,7 +10,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#include <freeradius-devel/autoconf.h> /* Needed for endian macros */
+#include <freeradius-devel/autoconf.h>	/* Needed for endian macros */
 
 /*
  *	The ubiquitous stringify macros
@@ -37,11 +37,6 @@ extern "C" {
 #endif
 
 /*
- *	struct field size
- */
-#define SIZEOF_MEMBER(_t, _m) sizeof(((_t *)0)->_m)
-
-/*
  *	Only use GCC __attribute__ if were building with a GCClike
  *	compiler.
  */
@@ -49,12 +44,6 @@ extern "C" {
 #  define CC_HINT(_x) __attribute__ ((_x))
 #else
 #  define CC_HINT(_x)
-#endif
-
-#ifdef HAVE_ATTRIBUTE_BOUNDED
-#  define CC_BOUNDED(_x, ...) CC_HINT(__bounded__(_x, ## __VA_ARGS__))
-#else
-#  define CC_BOUNDED(...)
 #endif
 
 /*
@@ -81,15 +70,6 @@ extern "C" {
 #else
 #  define DIAG_OFF(_x)
 #  define DIAG_ON(_x)
-#endif
-
-/*
- *	GCC and clang use different macros
- */
-#ifdef __clang__
-# define DIAG_OPTIONAL DIAG_OFF(unknown-pragmas)
-#else
-# define DIAG_OPTIONAL DIAG_OFF(pragmas)
 #endif
 
 /*
@@ -122,16 +102,16 @@ extern "C" {
  *	Other projects seem to use endian.h and variants, but these are
  *	in non standard locations, and may mess up cross compiling.
  *
- *	Here at least the endianness can be set explicitly with
+ *	Here at least the endianess can be set explicitly with
  *	-DLITTLE_ENDIAN or -DBIG_ENDIAN.
  */
-#if !defined(FR_LITTLE_ENDIAN) && !defined(FR_BIG_ENDIAN)
+#if !defined(LITTLE_ENDIAN) && !defined(BIG_ENDIAN)
 #  if defined(__LITTLE_ENDIAN__) || \
       (defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__))
-#    define FR_LITTLE_ENDIAN 1
+#    define LITTLE_ENDIAN 1
 #  elif defined(__BIG_ENDIAN__) || \
       (defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__))
-#    define FR_BIG_ENDIAN 1
+#    define BIG_ENDIAN 1
 #  else
 #    error Failed determining endianness of system
 #  endif

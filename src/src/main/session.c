@@ -40,7 +40,7 @@ int session_zap(REQUEST *request, uint32_t nasaddr, uint32_t nas_port,
 		int session_time)
 {
 	REQUEST *stopreq;
-	VALUE_PAIR *vp;
+	VALUE_PAIR *vp, *userpair;
 	int ret;
 
 	stopreq = request_alloc_fake(request);
@@ -51,13 +51,14 @@ int session_zap(REQUEST *request, uint32_t nasaddr, uint32_t nas_port,
 
 	/* Hold your breath */
 #define PAIR(n,v,e) do { \
-		if(!(vp = fr_pair_afrom_num(stopreq->packet,n, 0))) {	\
+		if(!(vp = paircreate(stopreq->packet,n, 0))) {	\
 			talloc_free(stopreq); \
 			ERROR("no memory"); \
+			pairfree(&(stopreq->packet->vps)); \
 			return 0; \
 		} \
 		vp->e = v; \
-		fr_pair_add(&(stopreq->packet->vps), vp); \
+		pairadd(&(stopreq->packet->vps), vp); \
 	} while(0)
 
 #define INTPAIR(n,v) PAIR(n,v,vp_integer)
@@ -65,25 +66,21 @@ int session_zap(REQUEST *request, uint32_t nasaddr, uint32_t nas_port,
 #define IPPAIR(n,v) PAIR(n,v,vp_ipaddr)
 
 #define STRINGPAIR(n,v) do { \
-	  if(!(vp = fr_pair_afrom_num(stopreq->packet,n, 0))) {	\
+	  if(!(vp = paircreate(stopreq->packet,n, 0))) {	\
 		talloc_free(stopreq); \
 		ERROR("no memory"); \
+		pairfree(&(stopreq->packet->vps)); \
 		return 0; \
 	} \
-	fr_pair_value_strcpy(vp, v);	\
-	fr_pair_add(&(stopreq->packet->vps), vp); \
+	pairstrcpy(vp, v);	\
+	pairadd(&(stopreq->packet->vps), vp); \
 	} while(0)
 
 	INTPAIR(PW_ACCT_STATUS_TYPE, PW_STATUS_STOP);
 	IPPAIR(PW_NAS_IP_ADDRESS, nasaddr);
-
-	INTPAIR(PW_EVENT_TIMESTAMP, 0);
-	vp->vp_date = time(NULL);
 	INTPAIR(PW_ACCT_DELAY_TIME, 0);
-
 	STRINGPAIR(PW_USER_NAME, user);
-	stopreq->username = vp;
-
+	userpair = vp;
 	INTPAIR(PW_NAS_PORT, nas_port);
 	STRINGPAIR(PW_ACCT_SESSION_ID, sessionid);
 	if(proto == 'P') {
@@ -103,10 +100,9 @@ int session_zap(REQUEST *request, uint32_t nasaddr, uint32_t nas_port,
 	INTPAIR(PW_ACCT_INPUT_PACKETS, 0);
 	INTPAIR(PW_ACCT_OUTPUT_PACKETS, 0);
 
+	stopreq->username = userpair;
 	stopreq->password = NULL;
 
-	RDEBUG("Running Accounting section for automatically created accounting 'stop'");
-	rdebug_pair_list(L_DBG_LVL_1, request, request->packet->vps, NULL);
 	ret = rad_accounting(stopreq);
 
 	/*
@@ -221,6 +217,7 @@ int rad_check_ts(uint32_t nasaddr, uint32_t nas_port, char const *user,
 	 *	Exit - 2 means "some error occured".
 	 */
 	exit(2);
+	return 2;
 }
 #else
 int rad_check_ts(UNUSED uint32_t nasaddr, UNUSED unsigned int nas_port,

@@ -1,8 +1,7 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version.
+ *   it under the terms of the GNU General Public License, version 2 if the
+ *   License as published by the Free Software Foundation.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -108,12 +107,22 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
-extern module_t rlm_dynamic_clients;
 module_t rlm_dynamic_clients = {
-	.magic		= RLM_MODULE_INIT,
-	.name		= "dynamic_clients",
-	.type		= RLM_TYPE_THREAD_SAFE,		/* type */
-	.methods = {
-		[MOD_AUTHORIZE]		= mod_authorize
+	RLM_MODULE_INIT,
+	"dynamic_clients",
+	RLM_TYPE_THREAD_SAFE,		/* type */
+	0,
+	NULL,				/* CONF_PARSER */
+	NULL,				/* instantiation */
+	NULL,				/* detach */
+	{
+		NULL,			/* authentication */
+		mod_authorize,	/* authorization */
+		NULL,			/* preaccounting */
+		NULL,			/* accounting */
+		NULL,			/* checksimul */
+		NULL,			/* pre-proxy */
+		NULL,			/* post-proxy */
+		NULL			/* post-auth */
 	},
 };

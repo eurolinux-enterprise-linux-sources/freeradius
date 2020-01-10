@@ -31,8 +31,16 @@
 	missingok
 	compress
 	postrotate
-		/usr/bin/systemctl reload-or-try-restart radiusd
+		/sbin/service radiusd reload
 	endscript
+}
+
+/var/log/radius/radutmp {
+	monthly
+	rotate 4
+	create
+	compress
+	missingok
 }
 
 /var/log/radius/radwtmp {

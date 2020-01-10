@@ -47,21 +47,6 @@ listen {
 #  need to setup hints for the remote radius server
 authorize {
 	#
-	#  Take a User-Name, and perform some checks on it, for spaces and other
-	#  invalid characters.  If the User-Name appears invalid, reject the
-	#  request.
-	#
-	#  See policy.d/filter for the definition of the filter_username policy.
-	#
-	filter_username
-
-	#
-	#  Do checks on outer / inner User-Name, so that users
-	#  can't spoof us by using incompatible identities
-	#
-#	filter_inner_identity
-
-	#
 	#  The chap module will set 'Auth-Type := CHAP' if we are
 	#  handling a CHAP request and Auth-Type has not already been set
 	chap
@@ -116,7 +101,7 @@ authorize {
 	#  the next few lines.
 	#
 	update control {
-		&Proxy-To-Realm := LOCAL
+	       Proxy-To-Realm := LOCAL
 	}
 
 	#
@@ -149,8 +134,8 @@ authorize {
 	#
 	#  If you are using /etc/smbpasswd, and are also doing
 	#  mschap authentication, the un-comment this line, and
-	#  enable the "smbpasswd" module.
-#	smbpasswd
+	#  configure the 'etc_smbpasswd' module, above.
+#	etc_smbpasswd
 
 	#
 	#  The ldap module reads passwords from the LDAP database.
@@ -220,11 +205,6 @@ authenticate {
 	Auth-Type MS-CHAP {
 		mschap
 	}
-
-	#
-	#  For old names, too.
-	#
-	mschap
 
 	#
 	#  Pluggable Authentication Modules.
@@ -314,46 +294,6 @@ post-auth {
 	#
 #	ldap
 
-
-	#
-	#  Un-comment the following if you want to generate Moonshot (ABFAB) TargetedIds
-	#  IMPORTANT: This requires the UUID package to be installed!
-	#
-#	moonshot_host_tid
-#	moonshot_realm_tid
-#	moonshot_coi_tid
-
-	#
-	#  Instead of "use_tunneled_reply", change this "if (0)" to an
-	#  "if (1)".
-	#
-	if (0) {
-		#
-		#  These attributes are for the inner-tunnel only,
-		#  and MUST NOT be copied to the outer reply.
-		#
-		update reply {
-			User-Name !* ANY
-			Message-Authenticator !* ANY
-			EAP-Message !* ANY
-			Proxy-State !* ANY
-			MS-MPPE-Encryption-Types !* ANY
-			MS-MPPE-Encryption-Policy !* ANY
-			MS-MPPE-Send-Key !* ANY
-			MS-MPPE-Recv-Key !* ANY
-		}
-
-		#
-		#  Copy the inner reply attributes to the outer
-		#  session-state list.  The post-auth policy will take
-		#  care of copying the outer session-state list to the
-		#  outer reply.
-		#
-		update {
-			&outer.session-state: += &reply:
-		}
-	}
-
 	#
 	#  Access-Reject packets are sent through the REJECT sub-section of the
 	#  post-auth section.
@@ -365,13 +305,6 @@ post-auth {
 		# log failed authentications in SQL, too.
 		-sql
 		attr_filter.access_reject
-
-		#
-		#  Let the outer session know which module failed, and why.
-		#
-		update outer.session-state {
-			&Module-Failure-Message := &request:Module-Failure-Message
-		}
 	}
 }
 
@@ -427,6 +360,28 @@ post-proxy {
 	#  reject the EAP request.
 	#
 	eap
+
+	#
+	#  If the server tries to proxy a request and fails, then the
+	#  request is processed through the modules in this section.
+	#
+	#  The main use of this section is to permit robust proxying
+	#  of accounting packets.  The server can be configured to
+	#  proxy accounting packets as part of normal processing.
+	#  Then, if the home server goes down, accounting packets can
+	#  be logged to a local "detail" file, for processing with
+	#  radrelay.  When the home server comes back up, radrelay
+	#  will read the detail file, and send the packets to the
+	#  home server.
+	#
+	#  With this configuration, the server always responds to
+	#  Accounting-Requests from the NAS, but only writes
+	#  accounting packets to disk if the home server is down.
+	#
+#	Post-Proxy-Type Fail {
+#			detail
+#	}
+
 }
 
 } # inner-tunnel server block

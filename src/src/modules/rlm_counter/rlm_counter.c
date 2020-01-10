@@ -1,8 +1,7 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version.
+ *   it under the terms of the GNU General Public License, version 2 if the
+ *   License as published by the Free Software Foundation.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -135,7 +134,8 @@ static const CONF_PARSER module_config[] = {
 
 	{ "cache-size", FR_CONF_OFFSET(PW_TYPE_INTEGER | PW_TYPE_DEPRECATED, rlm_counter_t, cache_size), NULL },
 	{ "cache_size", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_counter_t, cache_size), "1000" },
-	CONF_PARSER_TERMINATOR
+
+	{ NULL, -1, 0, NULL, NULL }
 };
 
 
@@ -160,13 +160,13 @@ static int counter_cmp(void *instance, UNUSED REQUEST *req, VALUE_PAIR *request,
 	/*
 	 *	Find the key attribute.
 	 */
-	key_vp = fr_pair_find_by_da(request, inst->key_attr, TAG_ANY);
+	key_vp = pairfind_da(request, inst->key_attr, TAG_ANY);
 	if (!key_vp) {
 		return RLM_MODULE_NOOP;
 	}
 
 	ASSIGN(key_datum.dptr,key_vp->vp_strvalue);
-	key_datum.dsize = key_vp->vp_length;
+	key_datum.dsize = key_vp->length;
 
 	count_datum = gdbm_fetch(inst->gdbm, key_datum);
 
@@ -323,58 +323,6 @@ static int find_next_reset(rlm_counter_t *inst, time_t timeval)
 }
 
 
-static int mod_bootstrap(CONF_SECTION *conf, void *instance)
-{
-	rlm_counter_t *inst = instance;
-	ATTR_FLAGS flags;
-	DICT_ATTR const *da;
-
-	memset(&flags, 0, sizeof(flags));
-	flags.compare = 1;	/* ugly hack */
-	da = dict_attrbyname(inst->counter_name);
-	if (da && (da->type != PW_TYPE_INTEGER)) {
-		cf_log_err_cs(conf, "Counter attribute %s MUST be integer", inst->counter_name);
-		return -1;
-	}
-
-	if (!da && (dict_addattr(inst->counter_name, -1, 0, PW_TYPE_INTEGER, flags) < 0)) {
-		cf_log_err_cs(conf, "Failed to create counter attribute %s: %s", inst->counter_name, fr_strerror());
-		return -1;
-	}
-
-	if (paircompare_register_byname(inst->counter_name, NULL, true, counter_cmp, inst) < 0) {
-		cf_log_err_cs(conf, "Failed to create counter attribute %s: %s", inst->counter_name, fr_strerror());
-		return -1;
-	}
-
-
-	da = dict_attrbyname(inst->counter_name);
-	if (!da) {
-		cf_log_err_cs(conf, "Failed to find counter attribute %s", inst->counter_name);
-		return -1;
-	}
-	inst->dict_attr = da;
-
-	/*
-	 *	Create a new attribute for the check item.
-	 */
-	flags.compare = 0;
-	if (dict_addattr(inst->check_name, -1, 0, PW_TYPE_INTEGER, flags) < 0) {
-		cf_log_err_cs(conf, "Failed to create check attribute %s: %s", inst->counter_name, fr_strerror());
-		return -1;
-
-	}
-
-	da = dict_attrbyname(inst->check_name);
-	if (!da) {
-		cf_log_err_cs(conf, "Failed to find check attribute %s", inst->counter_name);
-		return -1;
-	}
-	inst->check_attr = da;
-
-	return 0;
-}
-
 /*
  *	Do any per-module initialization that is separate to each
  *	configured instance of the module.  e.g. set up connections
@@ -390,6 +338,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	rlm_counter_t *inst = instance;
 	DICT_ATTR const *da;
 	DICT_VALUE *dval;
+	ATTR_FLAGS flags;
 	time_t now;
 	int cache_size;
 	int ret;
@@ -428,6 +377,40 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	} else {
 		inst->reply_attr = NULL;
 	}
+
+	/*
+	 *  Create a new attribute for the counter.
+	 */
+	rad_assert(inst->counter_name && *inst->counter_name);
+	memset(&flags, 0, sizeof(flags));
+	if (dict_addattr(inst->counter_name, -1, 0, PW_TYPE_INTEGER, flags) < 0) {
+		ERROR("rlm_counter: Failed to create counter attribute %s: %s", inst->counter_name, fr_strerror());
+		return -1;
+	}
+
+	da = dict_attrbyname(inst->counter_name);
+	if (!da) {
+		cf_log_err_cs(conf, "Failed to find counter attribute %s", inst->counter_name);
+		return -1;
+	}
+	inst->dict_attr = da;
+	DEBUG2("rlm_counter: Counter attribute %s is number %d", inst->counter_name, inst->dict_attr->attr);
+
+	/*
+	 * Create a new attribute for the check item.
+	 */
+	rad_assert(inst->check_name && *inst->check_name);
+	if (dict_addattr(inst->check_name, -1, 0, PW_TYPE_INTEGER, flags) < 0) {
+		ERROR("rlm_counter: Failed to create check attribute %s: %s", inst->counter_name, fr_strerror());
+		return -1;
+
+	}
+	da = dict_attrbyname(inst->check_name);
+	if (!da) {
+		ERROR("rlm_counter: Failed to find check attribute %s", inst->counter_name);
+		return -1;
+	}
+	inst->check_attr = da;
 
 	/*
 	 * Find the attribute for the allowed protocol
@@ -518,6 +501,13 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		}
 	}
 
+
+	/*
+	 *	Register the counter comparison operation.
+	 * FIXME: move all attributes to DA
+	 */
+	paircompare_register(inst->dict_attr, NULL, true, counter_cmp, inst);
+
 	/*
 	 * Init the mutex
 	 */
@@ -541,7 +531,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	int acctstatustype = 0;
 	time_t diff;
 
-	if ((key_vp = fr_pair_find_by_num(request->packet->vps, PW_ACCT_STATUS_TYPE, 0, TAG_ANY)) != NULL)
+	if ((key_vp = pairfind(request->packet->vps, PW_ACCT_STATUS_TYPE, 0, TAG_ANY)) != NULL)
 		acctstatustype = key_vp->vp_integer;
 	else {
 		DEBUG("rlm_counter: Could not find account status type in packet");
@@ -551,7 +541,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 		DEBUG("rlm_counter: We only run on Accounting-Stop packets");
 		return RLM_MODULE_NOOP;
 	}
-	uniqueid_vp = fr_pair_find_by_num(request->packet->vps, PW_ACCT_UNIQUE_SESSION_ID, 0, TAG_ANY);
+	uniqueid_vp = pairfind(request->packet->vps, PW_ACCT_UNIQUE_SESSION_ID, 0, TAG_ANY);
 	if (uniqueid_vp != NULL)
 		DEBUG("rlm_counter: Packet Unique ID = '%s'",uniqueid_vp->vp_strvalue);
 
@@ -573,7 +563,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	 * Check if we need to watch out for a specific service-type. If yes then check it
 	 */
 	if (inst->service_type != NULL) {
-		if ((proto_vp = fr_pair_find_by_num(request->packet->vps, PW_SERVICE_TYPE, 0, TAG_ANY)) == NULL) {
+		if ((proto_vp = pairfind(request->packet->vps, PW_SERVICE_TYPE, 0, TAG_ANY)) == NULL) {
 			DEBUG("rlm_counter: Could not find Service-Type attribute in the request. Returning NOOP");
 			return RLM_MODULE_NOOP;
 		}
@@ -586,7 +576,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	 * Check if request->timestamp - {Acct-Delay-Time} < last_reset
 	 * If yes reject the packet since it is very old
 	 */
-	key_vp = fr_pair_find_by_num(request->packet->vps, PW_ACCT_DELAY_TIME, 0, TAG_ANY);
+	key_vp = pairfind(request->packet->vps, PW_ACCT_DELAY_TIME, 0, TAG_ANY);
 	if (key_vp != NULL) {
 		if ((key_vp->vp_integer != 0) && (request->timestamp - (time_t) key_vp->vp_integer) < inst->last_reset) {
 			DEBUG("rlm_counter: This packet is too old. Returning NOOP");
@@ -601,7 +591,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	 *	The REAL username, after stripping.
 	 */
 	key_vp = (inst->key_attr->attr == PW_USER_NAME) ? request->username :
-					fr_pair_find_by_da(request->packet->vps, inst->key_attr, TAG_ANY);
+					pairfind_da(request->packet->vps, inst->key_attr, TAG_ANY);
 	if (!key_vp) {
 		DEBUG("rlm_counter: Could not find the key-attribute in the request. Returning NOOP");
 		return RLM_MODULE_NOOP;
@@ -610,14 +600,14 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	/*
 	 *	Look for the attribute to use as a counter.
 	 */
-	count_vp = fr_pair_find_by_da(request->packet->vps, inst->count_attr, TAG_ANY);
+	count_vp = pairfind_da(request->packet->vps, inst->count_attr, TAG_ANY);
 	if (!count_vp) {
 		DEBUG("rlm_counter: Could not find the count_attribute in the request");
 		return RLM_MODULE_NOOP;
 	}
 
 	ASSIGN(key_datum.dptr, key_vp->vp_strvalue);
-	key_datum.dsize = key_vp->vp_length;
+	key_datum.dsize = key_vp->length;
 
 	DEBUG("rlm_counter: Searching the database for key '%s'",key_vp->vp_strvalue);
 	pthread_mutex_lock(&inst->mutex);
@@ -696,7 +686,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
  *	from the database. The authentication code only needs to check
  *	the password, the rest is done here.
  */
-static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, UNUSED REQUEST *request)
 {
 	rlm_counter_t *inst = instance;
 	rlm_rcode_t rcode = RLM_MODULE_NOOP;
@@ -731,7 +721,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	 */
 	DEBUG2("rlm_counter: Entering module authorize code");
 	key_vp = (inst->key_attr->attr == PW_USER_NAME) ? request->username :
-		 fr_pair_find_by_da(request->packet->vps, inst->key_attr, TAG_ANY);
+		 pairfind_da(request->packet->vps, inst->key_attr, TAG_ANY);
 	if (!key_vp) {
 		DEBUG2("rlm_counter: Could not find Key value pair");
 		return rcode;
@@ -740,13 +730,13 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	/*
 	 *      Look for the check item
 	 */
-	if ((check_vp = fr_pair_find_by_da(request->config, inst->check_attr, TAG_ANY)) == NULL) {
+	if ((check_vp = pairfind_da(request->config_items, inst->check_attr, TAG_ANY)) == NULL) {
 		DEBUG2("rlm_counter: Could not find Check item value pair");
 		return rcode;
 	}
 
 	ASSIGN(key_datum.dptr, key_vp->vp_strvalue);
-	key_datum.dsize = key_vp->vp_length;
+	key_datum.dsize = key_vp->length;
 
 
 	/*
@@ -807,23 +797,23 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 				res += check_vp->vp_integer;
 			}
 
-			reply_item = fr_pair_find_by_num(request->reply->vps, PW_SESSION_TIMEOUT, 0, TAG_ANY);
+			reply_item = pairfind(request->reply->vps, PW_SESSION_TIMEOUT, 0, TAG_ANY);
 			if (reply_item) {
 				if (reply_item->vp_integer > res) {
 					reply_item->vp_integer = res;
 				}
 			} else {
-				reply_item = radius_pair_create(request->reply, &request->reply->vps, PW_SESSION_TIMEOUT, 0);
+				reply_item = radius_paircreate(request->reply, &request->reply->vps, PW_SESSION_TIMEOUT, 0);
 				reply_item->vp_integer = res;
 			}
 		} else if (inst->reply_attr) {
-			reply_item = fr_pair_find_by_da(request->reply->vps, inst->reply_attr, TAG_ANY);
+			reply_item = pairfind_da(request->reply->vps, inst->reply_attr, TAG_ANY);
 			if (reply_item) {
 				if (reply_item->vp_integer > res) {
 					reply_item->vp_integer = res;
 				}
 			} else {
-				reply_item = radius_pair_create(request->reply, &request->reply->vps, inst->reply_attr->attr,
+				reply_item = radius_paircreate(request->reply, &request->reply->vps, inst->reply_attr->attr,
 							       inst->reply_attr->vendor);
 				reply_item->vp_integer = res;
 			}
@@ -840,7 +830,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 		 * User is denied access, send back a reply message
 		*/
 		sprintf(msg, "Your maximum %s usage time has been reached", inst->reset);
-		pair_make_reply("Reply-Message", msg, T_OP_EQ);
+		pairmake_reply("Reply-Message", msg, T_OP_EQ);
 
 		REDEBUG("Maximum %s usage time reached", inst->reset);
 		rcode = RLM_MODULE_REJECT;
@@ -874,18 +864,22 @@ static int mod_detach(void *instance)
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
-extern module_t rlm_counter;
 module_t rlm_counter = {
-	.magic		= RLM_MODULE_INIT,
-	.name		= "counter",
-	.type		= RLM_TYPE_THREAD_SAFE,
-	.inst_size	= sizeof(rlm_counter_t),
-	.config		= module_config,
-	.bootstrap	= mod_bootstrap,
-	.instantiate	= mod_instantiate,
-	.detach		= mod_detach,
-	.methods = {
-		[MOD_AUTHORIZE]		= mod_authorize,
-		[MOD_ACCOUNTING]	= mod_accounting
+	RLM_MODULE_INIT,
+	"counter",
+	RLM_TYPE_THREAD_SAFE,		/* type */
+	sizeof(rlm_counter_t),
+	module_config,
+	mod_instantiate,		/* instantiation */
+	mod_detach,			/* detach */
+	{
+		NULL,			/* authentication */
+		mod_authorize,		/* authorization */
+		NULL,			/* preaccounting */
+		mod_accounting,		/* accounting */
+		NULL,			/* checksimul */
+		NULL,			/* pre-proxy */
+		NULL,			/* post-proxy */
+		NULL			/* post-auth */
 	},
 };

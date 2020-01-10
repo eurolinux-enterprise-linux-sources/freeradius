@@ -128,7 +128,7 @@ CREATE TABLE radpostauth (
   username varchar(64) NOT NULL default '',
   pass varchar(64) NOT NULL default '',
   reply varchar(32) NOT NULL default '',
-  authdate timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  authdate timestamp NOT NULL,
   PRIMARY KEY  (id)
 ) ENGINE = INNODB;
 

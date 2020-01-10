@@ -1,0 +1,26 @@
+From 608943a10f589974191fe69ec6ab2b9b456fd85b Mon Sep 17 00:00:00 2001
+From: "Alan T. DeKok" <aland@freeradius.org>
+Date: Mon, 8 May 2017 16:00:01 -0400
+Subject: [PATCH] set S_IWUSER when creating the file
+
+(cherry picked from commit 8f53382c64114936a0433d68101a24570783e13a)
+---
+ src/main/tls.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/main/tls.c b/src/main/tls.c
+index b790d2dc1..887f81755 100644
+--- a/src/main/tls.c
++++ b/src/main/tls.c
+@@ -1143,7 +1143,7 @@ static int cbtls_new_session(SSL *ssl, SSL_SESSION *sess)
+ 		/* open output file */
+ 		snprintf(filename, sizeof(filename), "%s%c%s.asn1",
+ 			 conf->session_cache_path, FR_DIR_SEP, buffer);
+-		fd = open(filename, O_RDWR|O_CREAT|O_EXCL, 0600);
++		fd = open(filename, O_RDWR|O_CREAT|O_EXCL, S_IWUSR);
+ 		if (fd < 0) {
+ 			DEBUG2("  SSL: could not open session file %s: %s", filename, fr_syserror(errno));
+ 			goto error;
+-- 
+2.11.0
+

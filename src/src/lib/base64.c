@@ -218,7 +218,7 @@ static const signed char b64[0x100] = {
  * @return true if CH is a character from the Base64 alphabet, and false
  *	otherwise.
  */
-bool fr_is_base64(char c)
+int fr_isbase64(char c)
 {
 	return b64[us(c)] >= 0;
 }
@@ -227,13 +227,13 @@ bool fr_is_base64(char c)
  *
  * Decode base64 encoded input array IN of length INLEN to output array OUT that
  * can hold *OUTLEN bytes.  Return true if decoding was successful, i.e.
- * if the input was valid base64 data, -1 otherwise.
+ * if the input was valid base64 data, false otherwise.
  *
  * If *OUTLEN is too small, as many bytes as possible will be written to OUT.
  * On return, *OUTLEN holds the length of decoded bytes in OUT.
  *
  * Note that as soon as any non-alphabet characters are encountered,
- * decoding is stopped and -1 is returned.
+ * decoding is stopped and false is returned.
  *
  * This means that, when applicable, you must remove any line terminators
  * that is part of the data stream before calling this function.
@@ -253,7 +253,7 @@ ssize_t fr_base64_decode(uint8_t *out, size_t outlen, char const *in, size_t inl
 	}
 
 	while (inlen >= 2) {
-		if (!fr_is_base64(in[0]) || !fr_is_base64(in[1])) {
+		if (!fr_isbase64(in[0]) || !fr_isbase64(in[1])) {
 			break;
 		}
 
@@ -264,7 +264,7 @@ ssize_t fr_base64_decode(uint8_t *out, size_t outlen, char const *in, size_t inl
 		if (in[2] == '=') {
 			if ((inlen != 4) || (in[3] != '=')) break;
 		} else {
-			if (!fr_is_base64(in[2])) break;
+			if (!fr_isbase64(in[2])) break;
 
 			*p++ = ((b64[us(in[1])] << 4) & 0xf0) | (b64[us(in[2])] >> 2);
 
@@ -273,7 +273,7 @@ ssize_t fr_base64_decode(uint8_t *out, size_t outlen, char const *in, size_t inl
 			if (in[3] == '=') {
 				if (inlen != 4) break;
 			} else {
-				if (!fr_is_base64(in[3])) break;
+				if (!fr_isbase64(in[3])) break;
 
 				*p++ = ((b64[us(in[2])] << 6) & 0xc0) | b64[us(in[3])];
 			}

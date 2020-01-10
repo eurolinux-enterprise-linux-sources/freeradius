@@ -34,7 +34,7 @@ use warnings;
 use Data::Dumper;
 
 # Bring the global hashes into the package scope
-our (%RAD_REQUEST, %RAD_REPLY, %RAD_CHECK, %RAD_STATE);
+our (%RAD_REQUEST, %RAD_REPLY, %RAD_CHECK);
 
 # This is hash wich hold original request from radius
 #my %RAD_REQUEST;
@@ -42,23 +42,8 @@ our (%RAD_REQUEST, %RAD_REPLY, %RAD_CHECK, %RAD_STATE);
 #my %RAD_REPLY;
 #This is for check items
 #my %RAD_CHECK;
-# This is the session-sate
-#my %RAD_STATE;
 # This is configuration items from "config" perl module configuration section
 #my %RAD_PERLCONF;
-
-# Multi-value attributes are mapped to perl arrayrefs.
-#
-#  update request {
-#    Filter-Id := 'foo'
-#    Filter-Id += 'bar'
-#  }
-#
-# This results to the following entry in %RAD_REQUEST:
-#
-#  $RAD_REQUEST{'Filter-Id'} = [ 'foo', 'bar' ];
-#
-# Likewise, you can assign an arrayref to return multi-value attributes
 
 #
 # This the remapping of return values
@@ -75,20 +60,13 @@ use constant {
 	RLM_MODULE_NUMCODES => 9  # How many return codes there are
 };
 
-# Same as src/include/log.h
-use constant {
-	L_AUTH         => 2,  # Authentication message
-	L_INFO         => 3,  # Informational message
-	L_ERR          => 4,  # Error message
-	L_WARN         => 5,  # Warning
-	L_PROXY        => 6,  # Proxy messages
-	L_ACCT         => 7,  # Accounting messages
-	L_DBG          => 16, # Only displayed when debugging is enabled
-	L_DBG_WARN     => 17, # Warning only displayed when debugging is enabled
-	L_DBG_ERR      => 18, # Error only displayed when debugging is enabled
-	L_DBG_WARN_REQ => 19, # Less severe warning only displayed when debugging is enabled
-	L_DBG_ERR_REQ  => 20, # Less severe error only displayed when debugging is enabled
-};
+# Same as src/include/radiusd.h
+use constant	L_DBG=>   1;
+use constant	L_AUTH=>  2;
+use constant	L_INFO=>  3;
+use constant	L_ERR=>   4;
+use constant	L_PROXY=> 5;
+use constant	L_ACCT=>  6;
 
 #  Global variables can persist across different calls to the module.
 #
@@ -126,12 +104,7 @@ sub authenticate {
 		return RLM_MODULE_REJECT;
 	} else {
 		# Accept user and set some attribute
-		if (&radiusd::xlat("%{client:group}") eq 'UltraAllInclusive') {
-			# User called from NAS with unlim plan set, set higher limits
-			$RAD_REPLY{'h323-credit-amount'} = "1000000";
-		} else {
-			$RAD_REPLY{'h323-credit-amount'} = "100";
-		}
+		$RAD_REPLY{'h323-credit-amount'} = "100";
 		return RLM_MODULE_OK;
 	}
 }
@@ -210,6 +183,9 @@ sub xlat {
 sub detach {
 	# For debugging purposes only
 #	&log_request_attributes;
+
+	# Do some logging.
+	&radiusd::radlog(L_DBG,"rlm_perl::Detaching. Reloading. Done.");
 }
 
 #

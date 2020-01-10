@@ -20,7 +20,7 @@
  * Copyright 2007 Alan DeKok <aland@deployingradius.com>
  */
 
-RCSID("$Id$")
+RCSID("$Id$");
 
 #include	<freeradius-devel/libradius.h>
 #include	<freeradius-devel/udpfromto.h>
@@ -30,7 +30,8 @@ RCSID("$Id$")
 #define MAX_VMPS_LEN (MAX_STRING_LEN - 1)
 
 /* @todo: this is a hack */
-#  define debug_pair(vp)	do { if (fr_debug_lvl && fr_log_fp) { \
+#  define DEBUG			if (fr_debug_flag && fr_log_fp) fr_printf_log
+#  define debug_pair(vp)	do { if (fr_debug_flag && fr_log_fp) { \
 					vp_print(fr_log_fp, vp); \
 				     } \
 				} while(0)
@@ -311,6 +312,16 @@ RADIUS_PACKET *vqp_recv(int sockfd)
 
 	ptr = packet->data;
 
+	if (0) {
+		size_t i;
+		for (i = 0; i < packet->data_len; i++) {
+		  if ((i & 0x0f) == 0) fprintf(stderr, "%02x: ", (int) i);
+			fprintf(stderr, "%02x ", ptr[i]);
+			if ((i & 0x0f) == 0x0f) fprintf(stderr, "\n");
+		}
+
+	}
+
 	if (ptr[3] > VQP_MAX_ATTRIBUTES) {
 		fr_strerror_printf("Too many VQP attributes");
 		rad_free(&packet);
@@ -422,7 +433,7 @@ int vqp_decode(RADIUS_PACKET *packet)
 	if (packet->data_len < VQP_HDR_LEN) return -1;
 
 	fr_cursor_init(&cursor, &packet->vps);
-	vp = fr_pair_afrom_num(packet, PW_VQP_PACKET_TYPE, 0);
+	vp = paircreate(packet, PW_VQP_PACKET_TYPE, 0);
 	if (!vp) {
 		fr_strerror_printf("No memory");
 		return -1;
@@ -431,7 +442,7 @@ int vqp_decode(RADIUS_PACKET *packet)
 	debug_pair(vp);
 	fr_cursor_insert(&cursor, vp);
 
-	vp = fr_pair_afrom_num(packet, PW_VQP_ERROR_CODE, 0);
+	vp = paircreate(packet, PW_VQP_ERROR_CODE, 0);
 	if (!vp) {
 		fr_strerror_printf("No memory");
 		return -1;
@@ -440,7 +451,7 @@ int vqp_decode(RADIUS_PACKET *packet)
 	debug_pair(vp);
 	fr_cursor_insert(&cursor, vp);
 
-	vp = fr_pair_afrom_num(packet, PW_VQP_SEQUENCE_NUMBER, 0);
+	vp = paircreate(packet, PW_VQP_SEQUENCE_NUMBER, 0);
 	if (!vp) {
 		fr_strerror_printf("No memory");
 		return -1;
@@ -468,26 +479,19 @@ int vqp_decode(RADIUS_PACKET *packet)
 		 *	Hack to get the dictionaries to work correctly.
 		 */
 		attribute |= 0x2000;
-		vp = fr_pair_afrom_num(packet, attribute, 0);
+		vp = paircreate(packet, attribute, 0);
 		if (!vp) {
-			fr_pair_list_free(&packet->vps);
+			pairfree(&packet->vps);
 
 			fr_strerror_printf("No memory");
 			return -1;
 		}
 
 		switch (vp->da->type) {
-		case PW_TYPE_ETHERNET:
-			if (length != 6) goto unknown;
-
-			memcpy(&vp->vp_ether, ptr, 6);
-			vp->vp_length = 6;
-			break;
-
 		case PW_TYPE_IPV4_ADDR:
 			if (length == 4) {
 				memcpy(&vp->vp_ipaddr, ptr, 4);
-				vp->vp_length = 4;
+				vp->length = 4;
 				break;
 			}
 
@@ -496,32 +500,32 @@ int vqp_decode(RADIUS_PACKET *packet)
 			 *	valuepair so we must change it's da to an
 			 *	unknown attr.
 			 */
-		unknown:
-			vp->da = dict_unknown_afrom_fields(vp, vp->da->attr, vp->da->vendor);
+			vp->da = dict_attrunknown(vp->da->attr, vp->da->vendor,
+						  true);
 			/* FALL-THROUGH */
 
 		default:
 		case PW_TYPE_OCTETS:
 			if (length < 1024) {
-				fr_pair_value_memcpy(vp, ptr, length);
+				pairmemcpy(vp, ptr, length);
 			} else {
-				fr_pair_value_memcpy(vp, ptr, 1024);
+				pairmemcpy(vp, ptr, 1024);
 			}
 			break;
 
 		case PW_TYPE_STRING:
 			if (length < 1024) {
-				vp->vp_length = length;
-				vp->vp_strvalue = p = talloc_array(vp, char, vp->vp_length + 1);
+				vp->length = length;
+				vp->vp_strvalue = p = talloc_array(vp, char, vp->length + 1);
 				vp->type = VT_DATA;
-				memcpy(p, ptr, vp->vp_length);
-				p[vp->vp_length] = '\0';
+				memcpy(p, ptr, vp->length);
+				p[vp->length] = '\0';
 			} else {
-				vp->vp_length = 1024;
+				vp->length = 1024;
 				vp->vp_strvalue = p = talloc_array(vp, char, 1025);
 				vp->type = VT_DATA;
-				memcpy(p, ptr, vp->vp_length);
-				p[vp->vp_length] = '\0';
+				memcpy(p, ptr, vp->length);
+				p[vp->length] = '\0';
 			}
 			break;
 		}
@@ -568,7 +572,7 @@ int vqp_encode(RADIUS_PACKET *packet, RADIUS_PACKET *original)
 
 	if (packet->data) return 0;
 
-	vp = fr_pair_find_by_num(packet->vps, PW_VQP_PACKET_TYPE, 0, TAG_ANY);
+	vp = pairfind(packet->vps, PW_VQP_PACKET_TYPE, 0, TAG_ANY);
 	if (!vp) {
 		fr_strerror_printf("Failed to find VQP-Packet-Type in response packet");
 		return -1;
@@ -583,7 +587,7 @@ int vqp_encode(RADIUS_PACKET *packet, RADIUS_PACKET *original)
 	length = VQP_HDR_LEN;
 	memset(vps, 0, sizeof(vps));
 
-	vp = fr_pair_find_by_num(packet->vps, PW_VQP_ERROR_CODE, 0, TAG_ANY);
+	vp = pairfind(packet->vps, PW_VQP_ERROR_CODE, 0, TAG_ANY);
 
 	/*
 	 *	FIXME: Map attributes from calling-station-Id, etc.
@@ -598,7 +602,7 @@ int vqp_encode(RADIUS_PACKET *packet, RADIUS_PACKET *original)
 	if (!vp) for (i = 0; i < VQP_MAX_ATTRIBUTES; i++) {
 		if (!contents[code][i]) break;
 
-		vps[i] = fr_pair_find_by_num(packet->vps, contents[code][i] | 0x2000, 0, TAG_ANY);
+		vps[i] = pairfind(packet->vps, contents[code][i] | 0x2000, 0, TAG_ANY);
 
 		/*
 		 *	FIXME: Print the name...
@@ -610,7 +614,7 @@ int vqp_encode(RADIUS_PACKET *packet, RADIUS_PACKET *original)
 		}
 
 		length += 6;
-		length += vps[i]->vp_length;
+		length += vps[i]->length;
 	}
 
 	packet->data = talloc_array(packet, uint8_t, length);
@@ -681,7 +685,7 @@ int vqp_encode(RADIUS_PACKET *packet, RADIUS_PACKET *original)
 
 		/* Length */
 		ptr[4] = 0;
-		ptr[5] = vp->vp_length & 0xff;
+		ptr[5] = vp->length & 0xff;
 
 		ptr += 6;
 
@@ -691,17 +695,13 @@ int vqp_encode(RADIUS_PACKET *packet, RADIUS_PACKET *original)
 			memcpy(ptr, &vp->vp_ipaddr, 4);
 			break;
 
-		case PW_TYPE_ETHERNET:
-			memcpy(ptr, vp->vp_ether, vp->vp_length);
-			break;
-
 		default:
 		case PW_TYPE_OCTETS:
 		case PW_TYPE_STRING:
-			memcpy(ptr, vp->vp_octets, vp->vp_length);
+			memcpy(ptr, vp->vp_octets, vp->length);
 			break;
 		}
-		ptr += vp->vp_length;
+		ptr += vp->length;
 	}
 
 	return 0;

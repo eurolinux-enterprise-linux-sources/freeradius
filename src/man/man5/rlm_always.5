@@ -10,64 +10,45 @@
 .RE
 .sp
 ..
-.TH rlm_always 5 "10 January 2015" "" "FreeRADIUS Module"
+.TH rlm_always 5 "3 February 2004" "" "FreeRADIUS Module"
 .SH NAME
 rlm_always \- FreeRADIUS Module
 .SH DESCRIPTION
 The \fIrlm_always\fP module provides a simple way to "always" return a
-value during the processing of a configuration section.
+value during the processing of a configuration section.  The module
+does nothing other than return a configured value.
 .PP
-The main configuration item is \fIrcode\fP, which sets the return code that
-this instantiation of the module will return. The default, if none
-specified, is 'fail'.
 .PP
-The valid options for rcode are as follows:
-.RS
-.TP
-reject
-reject the user;
+The main configuration item to be aware of is:
+.IP rcode
+This module will always return with the rcode specified.  The
+default, if none specified is: fail (RLM_MODULE_FAIL).
+.PP
+The valid options are:
+.IP reject
+RLM_MODULE_REJECT
 .IP fail
-a failure has occurred;
+RLM_MODULE_FAIL
 .IP ok
-success;
+RLM_MODULE_OK
 .IP handled
-the request has been handled: processing should be stopped and the response
-sent;
+RLM_MODULE_HANDLED
 .IP invalid
-request is invalid;
+RLM_MODULE_INVALID
 .IP userlock
-the user account has been locked out;
+RLM_MODULE_USERLOCK
 .IP notfound
-the user account cannot be found;
+RLM_MODULE_NOTFOUND
 .IP noop
-no-op: nothing has happened;
+RLM_MODULE_NOOP
 .IP updated
-the request has been updated.
-.RE
+RLM_MODULE_UPDATED
 .SH CONFIGURATION
-.PP
-.IP "rcode = <code>"
-This module will always return with the code specified, as listed in the
-table above.  If unspecified, the default is 'fail'.
-.IP "simulcount = <n>"
-If this module is used in the session{} section, the simulcount option
-simulates the user having 'n' current sessions. The default is to not
-override the number of sessions.
-.IP "mpp = <yes|no>"
-If set to yes, and this module is used in the session{} section, this
-simulates the user having multilink sessions.  The default is 'no'.
-.PP
-.SH EXAMPLE
-.PP
 .DS
 modules {
   ...
 .br
-  # instantiate the "always" module with the name "ok"
-.br
   always ok {
-.br
-	# return code for this instantiation is "ok":
 .br
 	rcode = ok
 .br
@@ -77,7 +58,7 @@ modules {
 .br
 }
 .br
-
+ ...
 .br
 authorize {
   ...
@@ -87,8 +68,6 @@ authorize {
 .br
      sql2          # try to find the user in sql2
 .br
-     # the default here would be to fail, but...
-.br
      ok            # if still not found, it's OK.
 .br
   }
@@ -96,6 +75,7 @@ authorize {
 .br
 }
 .DE
+.PP
 .SH SECTIONS
 .BR authorization,
 .BR authentication,
@@ -106,14 +86,10 @@ authorize {
 .BR postproxy
 .PP
 .SH FILES
-.I /etc/raddb/mods-available/always
+.I /etc/raddb/radiusd.conf
 .PP
 .SH "SEE ALSO"
 .BR radiusd (8),
-.BR radiusd.conf (5),
-.BR unlang (5)
-.PP
-Further details of how module return codes operate can be found at <http://wiki.freeradius.org/config/Fail-over>.
+.BR radiusd.conf (5)
 .SH AUTHOR
-Chris Parker <cparker@segv.org>, Matthew Newton
-<matthew@newtoncomputing.co.uk>.
+Chris Parker, cparker@segv.org

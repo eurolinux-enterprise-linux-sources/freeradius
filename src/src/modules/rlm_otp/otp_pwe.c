@@ -126,9 +126,9 @@ otp_pwe_t otp_pwe_present(REQUEST const *request)
 			continue;
 		}
 
-		if (fr_pair_find_by_num(request->packet->vps, pwattr[i]->attr,
+		if (pairfind(request->packet->vps, pwattr[i]->attr,
 			     pwattr[i]->vendor, TAG_ANY) &&
-		    fr_pair_find_by_num(request->packet->vps, pwattr[i + 1]->attr,
+		    pairfind(request->packet->vps, pwattr[i + 1]->attr,
 			     pwattr[i + 1]->vendor, TAG_ANY)) {
 			DEBUG("rlm_otp: %s: password attributes %s, %s",
 			      __func__, pwattr[i]->name, pwattr[i + 1]->name);
@@ -138,5 +138,5 @@ otp_pwe_t otp_pwe_present(REQUEST const *request)
 	}
 
 	DEBUG("rlm_otp: %s: no password attributes present", __func__);
-	return PWE_NONE;
+	return 0;
 }

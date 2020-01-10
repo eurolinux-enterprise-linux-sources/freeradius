@@ -82,7 +82,7 @@ int getusersfile(TALLOC_CTX *ctx, char const *filename, PAIR_LIST **pair_list, c
 	 *	Walk through the 'users' file list, if we're debugging,
 	 *	or if we're in compat_mode.
 	 */
-	if ((rad_debug_lvl) ||
+	if ((debug_flag) ||
 		(strcmp(compat_mode_str, "cistron") == 0)) {
 		PAIR_LIST *entry;
 		VALUE_PAIR *vp;
@@ -311,7 +311,7 @@ void rad_update_shared_seclist(struct sharedSecList **list, char const *id, VALU
 	}
 
 	//idtype
-	vp = fr_pair_find_by_num(items, RAD_EAP_IKEV2_IDTYPE, 0, TAG_ANY);
+	vp = pairfind(items, RAD_EAP_IKEV2_IDTYPE, 0, TAG_ANY);
 	if (!vp) {
 		DEBUG(IKEv2_LOG_PREFIX "[%s] -- Id type not set", id);
 	} else {
@@ -322,16 +322,16 @@ void rad_update_shared_seclist(struct sharedSecList **list, char const *id, VALU
 	}
 
 	//secret
-	vp = fr_pair_find_by_num(items, RAD_EAP_IKEV2_SECRET, 0, TAG_ANY);
-	if (!vp || !vp->vp_length) {
+	vp = pairfind(items, RAD_EAP_IKEV2_SECRET, 0, TAG_ANY);
+	if (!vp || !vp->length) {
 		DEBUG(IKEv2_LOG_PREFIX "[%s] -- Secret not set", id);
 	} else {
 		memcpy(&secret, &vp->vp_strvalue, sizeof(secret));
 	}
 
 	//authtype
-	vp = fr_pair_find_by_num(items, RAD_EAP_IKEV2_AUTHTYPE, 0, TAG_ANY);
-	if (vp && vp->vp_length) {
+	vp = pairfind(items, RAD_EAP_IKEV2_AUTHTYPE, 0, TAG_ANY);
+	if (vp && vp->length) {
 		authtype = AuthtypeFromName(vp->vp_strvalue);
 
 		if (authtype == -1) {

@@ -14,7 +14,7 @@
  *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-/**
+/*
  * $Id$
  *
  * @file soh.c
@@ -84,7 +84,8 @@ typedef struct {
 	uint16_t tlv_len;
 } soh_tlv;
 
-/** Read big-endian 2-byte unsigned from p
+/**
+ * @brief read big-endian 2-byte unsigned from p
  *
  * caller must ensure enough data exists at "p"
  */
@@ -96,8 +97,8 @@ uint16_t soh_pull_be_16(uint8_t const *p) {
 
 	return r;
 }
-
-/** Read big-endian 3-byte unsigned from p
+/**
+ * @brief read big-endian 3-byte unsigned from p
  *
  * caller must ensure enough data exists at "p"
  */
@@ -110,8 +111,8 @@ uint32_t soh_pull_be_24(uint8_t const *p) {
 
 	return r;
 }
-
-/** Read big-endian 4-byte unsigned from p
+/**
+ * @brief read big-endian 4-byte unsigned from p
  *
  * caller must ensure enough data exists at "p"
  */
@@ -126,9 +127,9 @@ uint32_t soh_pull_be_32(uint8_t const *p) {
 	return r;
 }
 
-static int eapsoh_mstlv(REQUEST *request, uint8_t const *p, unsigned int data_len) CC_HINT(nonnull);
-
-/** Parses the MS-SOH type/value (note: NOT type/length/value) data and update the sohvp list
+/**
+ * @brief Parses the MS-SOH type/value (note: NOT type/length/value) data and
+ * 	update the sohvp list
  *
  * See section 2.2.4 of MS-SOH. Because there's no "length" field we CANNOT just skip
  * unknown types; we need to know their length ahead of time. Therefore, we abort
@@ -140,11 +141,11 @@ static int eapsoh_mstlv(REQUEST *request, uint8_t const *p, unsigned int data_le
  * @param data_len length of blob
  * @return 1 on success, 0 on failure
  */
-static int eapsoh_mstlv(REQUEST *request, uint8_t const *p, unsigned int data_len)
-{
+static int CC_HINT(nonnull) eapsoh_mstlv(REQUEST *request, uint8_t const *p, unsigned int data_len) {
 	VALUE_PAIR *vp;
 	uint8_t c;
 	int t;
+	char *q;
 
 	while (data_len > 0) {
 		c = *p++;
@@ -161,35 +162,35 @@ static int eapsoh_mstlv(REQUEST *request, uint8_t const *p, unsigned int data_le
 			}
 			data_len -= 18;
 
-			vp = pair_make_request("SoH-MS-Machine-OS-vendor", "Microsoft", T_OP_EQ);
+			vp = pairmake_packet("SoH-MS-Machine-OS-vendor", "Microsoft", T_OP_EQ);
 			if (!vp) return 0;
 
-			vp = pair_make_request("SoH-MS-Machine-OS-version", NULL, T_OP_EQ);
-			if (!vp) return 0;
-
-			vp->vp_integer = soh_pull_be_32(p); p+=4;
-
-			vp = pair_make_request("SoH-MS-Machine-OS-release", NULL, T_OP_EQ);
+			vp = pairmake_packet("SoH-MS-Machine-OS-version", NULL, T_OP_EQ);
 			if (!vp) return 0;
 
 			vp->vp_integer = soh_pull_be_32(p); p+=4;
 
-			vp = pair_make_request("SoH-MS-Machine-OS-build", NULL, T_OP_EQ);
+			vp = pairmake_packet("SoH-MS-Machine-OS-release", NULL, T_OP_EQ);
 			if (!vp) return 0;
 
 			vp->vp_integer = soh_pull_be_32(p); p+=4;
 
-			vp = pair_make_request("SoH-MS-Machine-SP-version", NULL, T_OP_EQ);
+			vp = pairmake_packet("SoH-MS-Machine-OS-build", NULL, T_OP_EQ);
+			if (!vp) return 0;
+
+			vp->vp_integer = soh_pull_be_32(p); p+=4;
+
+			vp = pairmake_packet("SoH-MS-Machine-SP-version", NULL, T_OP_EQ);
 			if (!vp) return 0;
 
 			vp->vp_integer = soh_pull_be_16(p); p+=2;
 
-			vp = pair_make_request("SoH-MS-Machine-SP-release", NULL, T_OP_EQ);
+			vp = pairmake_packet("SoH-MS-Machine-SP-release", NULL, T_OP_EQ);
 			if (!vp) return 0;
 
 			vp->vp_integer = soh_pull_be_16(p); p+=2;
 
-			vp = pair_make_request("SoH-MS-Machine-Processor", NULL, T_OP_EQ);
+			vp = pairmake_packet("SoH-MS-Machine-Processor", NULL, T_OP_EQ);
 			if (!vp) return 0;
 
 			vp->vp_integer = soh_pull_be_16(p); p+=2;
@@ -244,10 +245,14 @@ static int eapsoh_mstlv(REQUEST *request, uint8_t const *p, unsigned int data_le
 			t = soh_pull_be_16(p);
 			p += 2;
 
-			vp = pair_make_request("SoH-MS-Machine-Name", NULL, T_OP_EQ);
+			vp = pairmake_packet("SoH-MS-Machine-Name", NULL, T_OP_EQ);
 			if (!vp) return 0;
 
-			fr_pair_value_bstrncpy(vp, p, t);
+			vp->vp_strvalue = q = talloc_array(vp, char, t);
+			vp->type = VT_DATA;
+
+			memcpy(q, p, t);
+			q[t] = 0;
 
 			p += t;
 			data_len -= 2 + t;
@@ -260,10 +265,10 @@ static int eapsoh_mstlv(REQUEST *request, uint8_t const *p, unsigned int data_le
 			 * 24 bytes opaque binary which we might, in future, have
 			 * to echo back to the client in a final SoHR
 			 */
-			vp = pair_make_request("SoH-MS-Correlation-Id", NULL, T_OP_EQ);
+			vp = pairmake_packet("SoH-MS-Correlation-Id", NULL, T_OP_EQ);
 			if (!vp) return 0;
 
-			fr_pair_value_memcpy(vp, p, 24);
+			pairmemcpy(vp, p, 24);
 			p += 24;
 			data_len -= 24;
 			break;
@@ -289,7 +294,7 @@ static int eapsoh_mstlv(REQUEST *request, uint8_t const *p, unsigned int data_le
 			 * 1 byte product type (client=1 domain_controller=2 server=3)
 			 */
 			p += 4;
-			vp = pair_make_request("SoH-MS-Machine-Role", NULL, T_OP_EQ);
+			vp = pairmake_packet("SoH-MS-Machine-Role", NULL, T_OP_EQ);
 			if (!vp) return 0;
 
 			vp->vp_integer = *p;
@@ -304,9 +309,9 @@ static int eapsoh_mstlv(REQUEST *request, uint8_t const *p, unsigned int data_le
 	}
 	return 1;
 }
-/** Convert windows Health Class status into human-readable string
- *
- * Tedious, really, really tedious...
+/**
+ * @brief Convert windows Health Class status into human-readable
+ * 	string. Tedious, really, really tedious...
  */
 static char const* clientstatus2str(uint32_t hcstatus) {
 	switch (hcstatus) {
@@ -345,8 +350,8 @@ static char const* clientstatus2str(uint32_t hcstatus) {
 	return NULL;
 }
 
-/** Convert a Health Class into a string
- *
+/**
+ * @brief convert a Health Class into a string
  */
 static char const* healthclass2str(uint8_t hc) {
 	switch (hc) {
@@ -368,7 +373,8 @@ static char const* healthclass2str(uint8_t hc) {
 	return NULL;
 }
 
-/** Parse the MS-SOH response in data and update sohvp
+/**
+ * @brief Parse the MS-SOH response in data and update sohvp.
  *
  * Note that sohvp might still have been updated in event of a failure.
  *
@@ -538,7 +544,7 @@ int soh_verify(REQUEST *request, uint8_t const *data, unsigned int data_len) {
 
 				RDEBUG2("SoH Health-Class-Status microsoft DWORD=%08x", hcstatus);
 
-				vp = pair_make_request("SoH-MS-Windows-Health-Status", NULL, T_OP_EQ);
+				vp = pairmake_packet("SoH-MS-Windows-Health-Status", NULL, T_OP_EQ);
 				if (!vp) return 0;
 
 				switch (curr_hc) {
@@ -547,39 +553,39 @@ int soh_verify(REQUEST *request, uint8_t const *data, unsigned int data_len) {
 					s = "security-updates";
 					switch (hcstatus) {
 					case 0xff0005:
-						fr_pair_value_sprintf(vp, "%s ok all-installed", s);
+						pairsprintf(vp, "%s ok all-installed", s);
 						break;
 
 					case 0xff0006:
-						fr_pair_value_sprintf(vp, "%s warn some-missing", s);
+						pairsprintf(vp, "%s warn some-missing", s);
 						break;
 
 					case 0xff0008:
-						fr_pair_value_sprintf(vp, "%s warn never-started", s);
+						pairsprintf(vp, "%s warn never-started", s);
 						break;
 
 					case 0xc0ff000c:
-						fr_pair_value_sprintf(vp, "%s error no-wsus-srv", s);
+						pairsprintf(vp, "%s error no-wsus-srv", s);
 						break;
 
 					case 0xc0ff000d:
-						fr_pair_value_sprintf(vp, "%s error no-wsus-clid", s);
+						pairsprintf(vp, "%s error no-wsus-clid", s);
 						break;
 
 					case 0xc0ff000e:
-						fr_pair_value_sprintf(vp, "%s warn wsus-disabled", s);
+						pairsprintf(vp, "%s warn wsus-disabled", s);
 						break;
 
 					case 0xc0ff000f:
-						fr_pair_value_sprintf(vp, "%s error comm-failure", s);
+						pairsprintf(vp, "%s error comm-failure", s);
 						break;
 
 					case 0xc0ff0010:
-						fr_pair_value_sprintf(vp, "%s warn needs-reboot", s);
+						pairsprintf(vp, "%s warn needs-reboot", s);
 						break;
 
 					default:
-						fr_pair_value_sprintf(vp, "%s error %08x", s, hcstatus);
+						pairsprintf(vp, "%s error %08x", s, hcstatus);
 						break;
 					}
 					break;
@@ -589,35 +595,35 @@ int soh_verify(REQUEST *request, uint8_t const *data, unsigned int data_len) {
 					s = "auto-updates";
 					switch (hcstatus) {
 					case 1:
-						fr_pair_value_sprintf(vp, "%s warn disabled", s);
+						pairsprintf(vp, "%s warn disabled", s);
 						break;
 
 					case 2:
-						fr_pair_value_sprintf(vp, "%s ok action=check-only", s);
+						pairsprintf(vp, "%s ok action=check-only", s);
 						break;
 
 					case 3:
-						fr_pair_value_sprintf(vp, "%s ok action=download", s);
+						pairsprintf(vp, "%s ok action=download", s);
 						break;
 
 					case 4:
-						fr_pair_value_sprintf(vp, "%s ok action=install", s);
+						pairsprintf(vp, "%s ok action=install", s);
 						break;
 
 					case 5:
-						fr_pair_value_sprintf(vp, "%s warn unconfigured", s);
+						pairsprintf(vp, "%s warn unconfigured", s);
 						break;
 
 					case 0xc0ff0003:
-						fr_pair_value_sprintf(vp, "%s warn service-down", s);
+						pairsprintf(vp, "%s warn service-down", s);
 						break;
 
 					case 0xc0ff0018:
-						fr_pair_value_sprintf(vp, "%s warn never-started", s);
+						pairsprintf(vp, "%s warn never-started", s);
 						break;
 
 					default:
-						fr_pair_value_sprintf(vp, "%s error %08x", s, hcstatus);
+						pairsprintf(vp, "%s error %08x", s, hcstatus);
 						break;
 					}
 					break;
@@ -634,12 +640,12 @@ int soh_verify(REQUEST *request, uint8_t const *data, unsigned int data_len) {
 							 */
 							t = clientstatus2str(hcstatus);
 							if (t) {
-								fr_pair_value_sprintf(vp, "%s error %s", s, t);
+								pairsprintf(vp, "%s error %s", s, t);
 							} else {
-								fr_pair_value_sprintf(vp, "%s error %08x", s, hcstatus);
+								pairsprintf(vp, "%s error %08x", s, hcstatus);
 							}
 						} else {
-							fr_pair_value_sprintf(vp,
+							pairsprintf(vp,
 									"%s ok snoozed=%i microsoft=%i up2date=%i enabled=%i",
 									s,
 									hcstatus & 0x8 ? 1 : 0,
@@ -649,16 +655,16 @@ int soh_verify(REQUEST *request, uint8_t const *data, unsigned int data_len) {
 									);
 						}
 					} else {
-						fr_pair_value_sprintf(vp, "%i unknown %08x", curr_hc, hcstatus);
+						pairsprintf(vp, "%i unknown %08x", curr_hc, hcstatus);
 					}
 					break;
 				}
 			} else {
-				vp = pair_make_request("SoH-MS-Health-Other", NULL, T_OP_EQ);
+				vp = pairmake_packet("SoH-MS-Health-Other", NULL, T_OP_EQ);
 				if (!vp) return 0;
 
 				/* FIXME: what to do with the payload? */
-				fr_pair_value_sprintf(vp, "%08x/%i ?", curr_shid, curr_shid_c);
+				pairsprintf(vp, "%08x/%i ?", curr_shid, curr_shid_c);
 			}
 			break;
 

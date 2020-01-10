@@ -1,17 +1,12 @@
 /*
- *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version.
- *
- *   This program is distributed in the hope that it will be useful,
- *   but WITHOUT ANY WARRANTY; without even the implied warranty of
- *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *   GNU General Public License for more details.
- *
- *   You should have received a copy of the GNU General Public License
- *   along with this program; if not, write to the Free Software
- *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ *   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ *   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ *   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+ *   OF THIRD PARTY RIGHTS. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+ *   HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ *   IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+ *   IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ *   SOFTWARE.
  */
 
 /**
@@ -27,9 +22,10 @@ USES_APPLE_DEPRECATED_API	/* OpenSSL API has been deprecated by Apple */
 #include <freeradius-devel/radiusd.h>
 #include <freeradius-devel/modules.h>
 
-#ifdef HAVE_OPENSSL_HMAC_H
+/*
+ *	FIXME: Add check for this header to configure.ac
+ */
 #include <openssl/hmac.h>
-#endif
 
 /*
  *	FIXME: Fix the build system to create definitions from names.
@@ -48,8 +44,9 @@ typedef struct rlm_wimax_t {
  *	buffer over-flows.
  */
 static const CONF_PARSER module_config[] = {
-	{ "delete_mppe_keys", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_wimax_t, delete_mppe_keys), "no" },
-	CONF_PARSER_TERMINATOR
+  { "delete_mppe_keys", FR_CONF_OFFSET(PW_TYPE_BOOLEAN, rlm_wimax_t, delete_mppe_keys), "no" },
+
+  { NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
 /*
@@ -58,22 +55,22 @@ static const CONF_PARSER module_config[] = {
  *	from the database. The authentication code only needs to check
  *	the password, the rest is done here.
  */
-static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, REQUEST *request)
+static rlm_rcode_t CC_HINT(nonnull) mod_authorize(UNUSED void *instance, UNUSED REQUEST *request)
 {
 	VALUE_PAIR *vp;
 
 	/*
 	 *	Fix Calling-Station-Id.  Damn you, WiMAX!
 	 */
-	vp =  fr_pair_find_by_num(request->packet->vps, PW_CALLING_STATION_ID, 0, TAG_ANY);
-	if (vp && (vp->vp_length == 6)) {
+	vp =  pairfind(request->packet->vps, PW_CALLING_STATION_ID, 0, TAG_ANY);
+	if (vp && (vp->length == 6)) {
 		int i;
 		char *p;
 		uint8_t buffer[6];
 
 		memcpy(buffer, vp->vp_strvalue, 6);
-		vp->vp_length = (5*3)+2;
-		vp->vp_strvalue = p = talloc_array(vp, char, vp->vp_length + 1);
+		vp->length = (5*3)+2;
+		vp->vp_strvalue = p = talloc_array(vp, char, vp->length + 1);
 		vp->type = VT_DATA;
 
 		/*
@@ -121,15 +118,15 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	rlm_wimax_t *inst = instance;
 	VALUE_PAIR *msk, *emsk, *vp;
 	VALUE_PAIR *mn_nai, *ip, *fa_rk;
-	HMAC_CTX *hmac;
+	HMAC_CTX hmac;
 	unsigned int rk1_len, rk2_len, rk_len;
 	uint32_t mip_spi;
 	uint8_t usage_data[24];
 	uint8_t mip_rk_1[EVP_MAX_MD_SIZE], mip_rk_2[EVP_MAX_MD_SIZE];
 	uint8_t mip_rk[2 * EVP_MAX_MD_SIZE];
 
-	msk = fr_pair_find_by_num(request->reply->vps, PW_EAP_MSK, 0, TAG_ANY);
-	emsk = fr_pair_find_by_num(request->reply->vps, PW_EAP_EMSK, 0, TAG_ANY);
+	msk = pairfind(request->reply->vps, 1129, 0, TAG_ANY);
+	emsk = pairfind(request->reply->vps, 1130, 0, TAG_ANY);
 	if (!msk || !emsk) {
 		RDEBUG("No EAP-MSK or EAP-EMSK.  Cannot create WiMAX keys");
 		return RLM_MODULE_NOOP;
@@ -140,12 +137,12 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	 *	the WiMAX-MSK so that the client has a key available.
 	 */
 	if (inst->delete_mppe_keys) {
-		fr_pair_delete_by_num(&request->reply->vps, 16, VENDORPEC_MICROSOFT, TAG_ANY);
-		fr_pair_delete_by_num(&request->reply->vps, 17, VENDORPEC_MICROSOFT, TAG_ANY);
+		pairdelete(&request->reply->vps, 16, VENDORPEC_MICROSOFT, TAG_ANY);
+		pairdelete(&request->reply->vps, 17, VENDORPEC_MICROSOFT, TAG_ANY);
 
-		vp = pair_make_reply("WiMAX-MSK", NULL, T_OP_EQ);
+		vp = pairmake_reply("WiMAX-MSK", NULL, T_OP_EQ);
 		if (vp) {
-			fr_pair_value_memcpy(vp, msk->vp_octets, msk->vp_length);
+			pairmemcpy(vp, msk->vp_octets, msk->length);
 		}
 	}
 
@@ -160,20 +157,20 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	/*
 	 *	MIP-RK-1 = HMAC-SSHA256(EMSK, usage-data | 0x01)
 	 */
-	hmac = HMAC_CTX_new();
-	HMAC_Init_ex(hmac, emsk->vp_octets, emsk->vp_length, EVP_sha256(), NULL);
+	HMAC_CTX_init(&hmac);
+	HMAC_Init_ex(&hmac, emsk->vp_octets, emsk->length, EVP_sha256(), NULL);
 
-	HMAC_Update(hmac, &usage_data[0], sizeof(usage_data));
-	HMAC_Final(hmac, &mip_rk_1[0], &rk1_len);
+	HMAC_Update(&hmac, &usage_data[0], sizeof(usage_data));
+	HMAC_Final(&hmac, &mip_rk_1[0], &rk1_len);
 
 	/*
 	 *	MIP-RK-2 = HMAC-SSHA256(EMSK, MIP-RK-1 | usage-data | 0x01)
 	 */
-	HMAC_Init_ex(hmac, emsk->vp_octets, emsk->vp_length, EVP_sha256(), NULL);
+	HMAC_Init_ex(&hmac, emsk->vp_octets, emsk->length, EVP_sha256(), NULL);
 
-	HMAC_Update(hmac, (uint8_t const *) &mip_rk_1, rk1_len);
-	HMAC_Update(hmac, &usage_data[0], sizeof(usage_data));
-	HMAC_Final(hmac, &mip_rk_2[0], &rk2_len);
+	HMAC_Update(&hmac, (uint8_t const *) &mip_rk_1, rk1_len);
+	HMAC_Update(&hmac, &usage_data[0], sizeof(usage_data));
+	HMAC_Final(&hmac, &mip_rk_2[0], &rk2_len);
 
 	memcpy(mip_rk, mip_rk_1, rk1_len);
 	memcpy(mip_rk + rk1_len, mip_rk_2, rk2_len);
@@ -182,10 +179,10 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	/*
 	 *	MIP-SPI = HMAC-SSHA256(MIP-RK, "SPI CMIP PMIP");
 	 */
-	HMAC_Init_ex(hmac, mip_rk, rk_len, EVP_sha256(), NULL);
+	HMAC_Init_ex(&hmac, mip_rk, rk_len, EVP_sha256(), NULL);
 
-	HMAC_Update(hmac, (uint8_t const *) "SPI CMIP PMIP", 12);
-	HMAC_Final(hmac, &mip_rk_1[0], &rk1_len);
+	HMAC_Update(&hmac, (uint8_t const *) "SPI CMIP PMIP", 12);
+	HMAC_Final(&hmac, &mip_rk_1[0], &rk1_len);
 
 	/*
 	 *	Take the 4 most significant octets.
@@ -195,7 +192,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 		   (mip_rk_1[2] << 8) | mip_rk_1[3]);
 	if (mip_spi < 256) mip_spi += 256;
 
-	if (rad_debug_lvl) {
+	if (debug_flag) {
 		int len = rk_len;
 		char buffer[512];
 
@@ -213,8 +210,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	/*
 	 *	Calculate mobility keys
 	 */
-	mn_nai = fr_pair_find_by_num(request->packet->vps, PW_WIMAX_MN_NAI, 0, TAG_ANY);
-	if (!mn_nai) mn_nai = fr_pair_find_by_num(request->reply->vps, PW_WIMAX_MN_NAI, 0, TAG_ANY);
+	mn_nai = pairfind(request->packet->vps, 1900, 0, TAG_ANY);
+	if (!mn_nai) mn_nai = pairfind(request->reply->vps, 1900, 0, TAG_ANY);
 	if (!mn_nai) {
 		RWDEBUG("WiMAX-MN-NAI was not found in the request or in the reply");
 		RWDEBUG("We cannot calculate MN-HA keys");
@@ -224,7 +221,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	 *	WiMAX-IP-Technology
 	 */
 	vp = NULL;
-	if (mn_nai) vp = fr_pair_find_by_num(request->reply->vps, 23, VENDORPEC_WIMAX, TAG_ANY);
+	if (mn_nai) vp = pairfind(request->reply->vps, 23, VENDORPEC_WIMAX, TAG_ANY);
 	if (!vp) {
 		RWDEBUG("WiMAX-IP-Technology not found in reply");
 		RWDEBUG("Not calculating MN-HA keys");
@@ -235,7 +232,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 		/*
 		 *	Look for WiMAX-hHA-IP-MIP4
 		 */
-		ip = fr_pair_find_by_num(request->reply->vps, 6, VENDORPEC_WIMAX, TAG_ANY);
+		ip = pairfind(request->reply->vps, 6, VENDORPEC_WIMAX, TAG_ANY);
 		if (!ip) {
 			RWDEBUG("WiMAX-hHA-IP-MIP4 not found.  Cannot calculate MN-HA-PMIP4 key");
 			break;
@@ -245,33 +242,33 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 		 *	MN-HA-PMIP4 =
 		 *	   H(MIP-RK, "PMIP4 MN HA" | HA-IPv4 | MN-NAI);
 		 */
-		HMAC_Init_ex(hmac, mip_rk, rk_len, EVP_sha1(), NULL);
+		HMAC_Init_ex(&hmac, mip_rk, rk_len, EVP_sha1(), NULL);
 
-		HMAC_Update(hmac, (uint8_t const *) "PMIP4 MN HA", 11);
-		HMAC_Update(hmac, (uint8_t const *) &ip->vp_ipaddr, 4);
-		HMAC_Update(hmac, (uint8_t const *) &mn_nai->vp_strvalue, mn_nai->vp_length);
-		HMAC_Final(hmac, &mip_rk_1[0], &rk1_len);
+		HMAC_Update(&hmac, (uint8_t const *) "PMIP4 MN HA", 11);
+		HMAC_Update(&hmac, (uint8_t const *) &ip->vp_ipaddr, 4);
+		HMAC_Update(&hmac, (uint8_t const *) &mn_nai->vp_strvalue, mn_nai->length);
+		HMAC_Final(&hmac, &mip_rk_1[0], &rk1_len);
 
 		/*
 		 *	Put MN-HA-PMIP4 into WiMAX-MN-hHA-MIP4-Key
 		 */
-		vp = fr_pair_find_by_num(request->reply->vps, 10, VENDORPEC_WIMAX, TAG_ANY);
+		vp = pairfind(request->reply->vps, 10, VENDORPEC_WIMAX, TAG_ANY);
 		if (!vp) {
-			vp = radius_pair_create(request->reply, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       10, VENDORPEC_WIMAX);
 		}
 		if (!vp) {
 			RWDEBUG("Failed creating WiMAX-MN-hHA-MIP4-Key");
 			break;
 		}
-		fr_pair_value_memcpy(vp, &mip_rk_1[0], rk1_len);
+		pairmemcpy(vp, &mip_rk_1[0], rk1_len);
 
 		/*
 		 *	Put MN-HA-PMIP4-SPI into WiMAX-MN-hHA-MIP4-SPI
 		 */
-		vp = fr_pair_find_by_num(request->reply->vps, 11, VENDORPEC_WIMAX, TAG_ANY);
+		vp = pairfind(request->reply->vps, 11, VENDORPEC_WIMAX, TAG_ANY);
 		if (!vp) {
-			vp = radius_pair_create(request->reply, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       11, VENDORPEC_WIMAX);
 		}
 		if (!vp) {
@@ -285,7 +282,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 		/*
 		 *	Look for WiMAX-hHA-IP-MIP4
 		 */
-		ip = fr_pair_find_by_num(request->reply->vps, 6, VENDORPEC_WIMAX, TAG_ANY);
+		ip = pairfind(request->reply->vps, 6, VENDORPEC_WIMAX, TAG_ANY);
 		if (!ip) {
 			RWDEBUG("WiMAX-hHA-IP-MIP4 not found.  Cannot calculate MN-HA-CMIP4 key");
 			break;
@@ -295,33 +292,33 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 		 *	MN-HA-CMIP4 =
 		 *	   H(MIP-RK, "CMIP4 MN HA" | HA-IPv4 | MN-NAI);
 		 */
-		HMAC_Init_ex(hmac, mip_rk, rk_len, EVP_sha1(), NULL);
+		HMAC_Init_ex(&hmac, mip_rk, rk_len, EVP_sha1(), NULL);
 
-		HMAC_Update(hmac, (uint8_t const *) "CMIP4 MN HA", 11);
-		HMAC_Update(hmac, (uint8_t const *) &ip->vp_ipaddr, 4);
-		HMAC_Update(hmac, (uint8_t const *) &mn_nai->vp_strvalue, mn_nai->vp_length);
-		HMAC_Final(hmac, &mip_rk_1[0], &rk1_len);
+		HMAC_Update(&hmac, (uint8_t const *) "CMIP4 MN HA", 11);
+		HMAC_Update(&hmac, (uint8_t const *) &ip->vp_ipaddr, 4);
+		HMAC_Update(&hmac, (uint8_t const *) &mn_nai->vp_strvalue, mn_nai->length);
+		HMAC_Final(&hmac, &mip_rk_1[0], &rk1_len);
 
 		/*
 		 *	Put MN-HA-CMIP4 into WiMAX-MN-hHA-MIP4-Key
 		 */
-		vp = fr_pair_find_by_num(request->reply->vps, 10, VENDORPEC_WIMAX, TAG_ANY);
+		vp = pairfind(request->reply->vps, 10, VENDORPEC_WIMAX, TAG_ANY);
 		if (!vp) {
-			vp = radius_pair_create(request->reply, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       10, VENDORPEC_WIMAX);
 		}
 		if (!vp) {
 			RWDEBUG("Failed creating WiMAX-MN-hHA-MIP4-Key");
 			break;
 		}
-		fr_pair_value_memcpy(vp, &mip_rk_1[0], rk1_len);
+		pairmemcpy(vp, &mip_rk_1[0], rk1_len);
 
 		/*
 		 *	Put MN-HA-CMIP4-SPI into WiMAX-MN-hHA-MIP4-SPI
 		 */
-		vp = fr_pair_find_by_num(request->reply->vps, 11, VENDORPEC_WIMAX, TAG_ANY);
+		vp = pairfind(request->reply->vps, 11, VENDORPEC_WIMAX, TAG_ANY);
 		if (!vp) {
-			vp = radius_pair_create(request->reply, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       11, VENDORPEC_WIMAX);
 		}
 		if (!vp) {
@@ -335,7 +332,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 		/*
 		 *	Look for WiMAX-hHA-IP-MIP6
 		 */
-		ip = fr_pair_find_by_num(request->reply->vps, 7, VENDORPEC_WIMAX, TAG_ANY);
+		ip = pairfind(request->reply->vps, 7, VENDORPEC_WIMAX, TAG_ANY);
 		if (!ip) {
 			RWDEBUG("WiMAX-hHA-IP-MIP6 not found.  Cannot calculate MN-HA-CMIP6 key");
 			break;
@@ -345,33 +342,33 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 		 *	MN-HA-CMIP6 =
 		 *	   H(MIP-RK, "CMIP6 MN HA" | HA-IPv6 | MN-NAI);
 		 */
-		HMAC_Init_ex(hmac, mip_rk, rk_len, EVP_sha1(), NULL);
+		HMAC_Init_ex(&hmac, mip_rk, rk_len, EVP_sha1(), NULL);
 
-		HMAC_Update(hmac, (uint8_t const *) "CMIP6 MN HA", 11);
-		HMAC_Update(hmac, (uint8_t const *) &ip->vp_ipv6addr, 16);
-		HMAC_Update(hmac, (uint8_t const *) &mn_nai->vp_strvalue, mn_nai->vp_length);
-		HMAC_Final(hmac, &mip_rk_1[0], &rk1_len);
+		HMAC_Update(&hmac, (uint8_t const *) "CMIP6 MN HA", 11);
+		HMAC_Update(&hmac, (uint8_t const *) &ip->vp_ipv6addr, 16);
+		HMAC_Update(&hmac, (uint8_t const *) &mn_nai->vp_strvalue, mn_nai->length);
+		HMAC_Final(&hmac, &mip_rk_1[0], &rk1_len);
 
 		/*
 		 *	Put MN-HA-CMIP6 into WiMAX-MN-hHA-MIP6-Key
 		 */
-		vp = fr_pair_find_by_num(request->reply->vps, 12, VENDORPEC_WIMAX, TAG_ANY);
+		vp = pairfind(request->reply->vps, 12, VENDORPEC_WIMAX, TAG_ANY);
 		if (!vp) {
-			vp = radius_pair_create(request->reply, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       12, VENDORPEC_WIMAX);
 		}
 		if (!vp) {
 			RWDEBUG("Failed creating WiMAX-MN-hHA-MIP6-Key");
 			break;
 		}
-		fr_pair_value_memcpy(vp, &mip_rk_1[0], rk1_len);
+		pairmemcpy(vp, &mip_rk_1[0], rk1_len);
 
 		/*
 		 *	Put MN-HA-CMIP6-SPI into WiMAX-MN-hHA-MIP6-SPI
 		 */
-		vp = fr_pair_find_by_num(request->reply->vps, 13, VENDORPEC_WIMAX, TAG_ANY);
+		vp = pairfind(request->reply->vps, 13, VENDORPEC_WIMAX, TAG_ANY);
 		if (!vp) {
-			vp = radius_pair_create(request->reply, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       13, VENDORPEC_WIMAX);
 		}
 		if (!vp) {
@@ -390,15 +387,15 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	 *
 	 *	FA-RK= H(MIP-RK, "FA-RK")
 	 */
-	fa_rk = fr_pair_find_by_num(request->reply->vps, 14, VENDORPEC_WIMAX, TAG_ANY);
-	if (fa_rk && (fa_rk->vp_length <= 1)) {
-		HMAC_Init_ex(hmac, mip_rk, rk_len, EVP_sha1(), NULL);
+	fa_rk = pairfind(request->reply->vps, 14, VENDORPEC_WIMAX, TAG_ANY);
+	if (fa_rk && (fa_rk->length <= 1)) {
+		HMAC_Init_ex(&hmac, mip_rk, rk_len, EVP_sha1(), NULL);
 
-		HMAC_Update(hmac, (uint8_t const *) "FA-RK", 5);
+		HMAC_Update(&hmac, (uint8_t const *) "FA-RK", 5);
 
-		HMAC_Final(hmac, &mip_rk_1[0], &rk1_len);
+		HMAC_Final(&hmac, &mip_rk_1[0], &rk1_len);
 
-		fr_pair_value_memcpy(fa_rk, &mip_rk_1[0], rk1_len);
+		pairmemcpy(fa_rk, &mip_rk_1[0], rk1_len);
 	}
 
 	/*
@@ -406,9 +403,9 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	 *	really MIP-SPI.  Clear?  Of course.  This is WiMAX.
 	 */
 	if (fa_rk) {
-		vp = fr_pair_find_by_num(request->reply->vps, 61, VENDORPEC_WIMAX, TAG_ANY);
+		vp = pairfind(request->reply->vps, 61, VENDORPEC_WIMAX, TAG_ANY);
 		if (!vp) {
-			vp = radius_pair_create(request->reply, &request->reply->vps,
+			vp = radius_paircreate(request->reply, &request->reply->vps,
 					       61, VENDORPEC_WIMAX);
 		}
 		if (!vp) {
@@ -423,7 +420,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	 *
 	 *	WiMAX-RRQ-MN-HA-SPI
 	 */
-	vp = fr_pair_find_by_num(request->packet->vps, 20, VENDORPEC_WIMAX, TAG_ANY);
+	vp = pairfind(request->packet->vps, 20, VENDORPEC_WIMAX, TAG_ANY);
 	if (vp) {
 		RDEBUG("Client requested MN-HA key: Should use SPI to look up key from storage");
 		if (!mn_nai) {
@@ -433,7 +430,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 		/*
 		 *	WiMAX-RRQ-HA-IP
 		 */
-		if (!fr_pair_find_by_num(request->packet->vps, 18, VENDORPEC_WIMAX, TAG_ANY)) {
+		if (!pairfind(request->packet->vps, 18, VENDORPEC_WIMAX, TAG_ANY)) {
 			RWDEBUG("HA-IP was not found!");
 		}
 
@@ -441,7 +438,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 		/*
 		 *	WiMAX-HA-RK-Key-Requested
 		 */
-		vp = fr_pair_find_by_num(request->packet->vps, 58, VENDORPEC_WIMAX, TAG_ANY);
+		vp = pairfind(request->packet->vps, 58, VENDORPEC_WIMAX, TAG_ANY);
 		if (vp && (vp->vp_integer == 1)) {
 			RDEBUG("Client requested HA-RK: Should use IP to look it up from storage");
 		}
@@ -450,7 +447,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
 	/*
 	 *	Wipe the context of all sensitive information.
 	 */
-	HMAC_CTX_free(hmac);
+	HMAC_CTX_cleanup(&hmac);
 
 	return RLM_MODULE_UPDATED;
 }
@@ -465,17 +462,22 @@ static rlm_rcode_t CC_HINT(nonnull) mod_post_auth(void *instance, REQUEST *reque
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
-extern module_t rlm_wimax;
 module_t rlm_wimax = {
-	.magic		= RLM_MODULE_INIT,
-	.name		= "wimax",
-	.type		= RLM_TYPE_THREAD_SAFE,
-	.inst_size	= sizeof(rlm_wimax_t),
-	.config		= module_config,
-	.methods = {
-		[MOD_AUTHORIZE]		= mod_authorize,
-		[MOD_PREACCT]		= mod_preacct,
-		[MOD_ACCOUNTING]	= mod_accounting,
-		[MOD_POST_AUTH]		= mod_post_auth
+	RLM_MODULE_INIT,
+	"wimax",
+	RLM_TYPE_THREAD_SAFE,		/* type */
+	sizeof(rlm_wimax_t),
+	module_config,
+	NULL,			/* instantiation */
+	NULL,				/* detach */
+	{
+		NULL,			/* authentication */
+		mod_authorize,	/* authorization */
+		mod_preacct,		/* preaccounting */
+		mod_accounting,	/* accounting */
+		NULL,			/* checksimul */
+		NULL,			/* pre-proxy */
+		NULL,			/* post-proxy */
+		mod_post_auth 		/* post-auth */
 	},
 };

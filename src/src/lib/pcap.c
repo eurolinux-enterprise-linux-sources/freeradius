@@ -1,6 +1,6 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 of the
+ *   it under the terms of the GNU General Public License, version 2 if the
  *   License as published by the Free Software Foundation.
  *
  *   This program is distributed in the hope that it will be useful,
@@ -73,30 +73,6 @@ static int _free_pcap(fr_pcap_t *pcap) {
 	return 0;
 }
 
-/** Get data link from pcap_if_t
- *
- * libpcap requires an open pcap handle to get data_link type
- * unfortunately when we're trying to find useful interfaces
- * this is too late.
- *
- * @param errbuff Error message.
- * @param dev to get link layer for.
- * @return datalink layer or -1 on failure.
- */
-int fr_pcap_if_link_layer(char *errbuff, pcap_if_t *dev)
-{
-	pcap_t *pcap;
-	int data_link;
-
-	pcap = pcap_open_live(dev->name, 0, 0, 0, errbuff);
-	if (!pcap) return -1;
-
-	data_link = pcap_datalink(pcap);
-	pcap_close(pcap);
-
-	return data_link;
-}
-
 /** Initialise a pcap handle abstraction
  *
  * @param ctx talloc TALLOC_CTX to allocate handle in.
@@ -114,7 +90,7 @@ fr_pcap_t *fr_pcap_init(TALLOC_CTX *ctx, char const *name, fr_pcap_type_t type)
 	talloc_set_destructor(this, _free_pcap);
 	this->name = talloc_typed_strdup(this, name);
 	this->type = type;
-	this->link_layer = -1;
+	this->link_type = -1;
 
 	return this;
 }
@@ -182,7 +158,7 @@ int fr_pcap_open(fr_pcap_t *pcap)
 		}
 
 		pcap->fd = pcap_get_selectable_fd(pcap->handle);
-		pcap->link_layer = pcap_datalink(pcap->handle);
+		pcap->link_type = pcap_datalink(pcap->handle);
 #ifndef __linux__
 		{
 			int value = 1;
@@ -202,14 +178,14 @@ int fr_pcap_open(fr_pcap_t *pcap)
 			return -1;
 		}
 		pcap->fd = pcap_get_selectable_fd(pcap->handle);
-		pcap->link_layer = pcap_datalink(pcap->handle);
+		pcap->link_type = pcap_datalink(pcap->handle);
 		break;
 
 	case PCAP_FILE_OUT:
-		if (pcap->link_layer < 0) {
-			pcap->link_layer = DLT_EN10MB;
+		if (pcap->link_type < 0) {
+			pcap->link_type = DLT_EN10MB;
 		}
-		pcap->handle = pcap_open_dead(pcap->link_layer, SNAPLEN);
+		pcap->handle = pcap_open_dead(pcap->link_type, SNAPLEN);
 		if (!pcap->handle) {
 			fr_strerror_printf("Unknown error occurred opening dead PCAP handle");
 
@@ -232,7 +208,7 @@ int fr_pcap_open(fr_pcap_t *pcap)
 			return -1;
 		}
 		pcap->fd = pcap_get_selectable_fd(pcap->handle);
-		pcap->link_layer = pcap_datalink(pcap->handle);
+		pcap->link_type = pcap_datalink(pcap->handle);
 		break;
 #else
 	case PCAP_STDIO_IN:
@@ -256,7 +232,7 @@ int fr_pcap_open(fr_pcap_t *pcap)
 
 		return -1;
 #endif
-	case PCAP_INVALID:
+		case PCAP_INVALID:
 	default:
 		fr_assert(0);
 		fr_strerror_printf("Bad handle type (%i)", pcap->type);
@@ -287,7 +263,7 @@ int fr_pcap_apply_filter(fr_pcap_t *pcap, char const *expression)
 	 * 	https://github.com/the-tcpdump-group/libpcap/commit/676cf8a61ed240d0a86d471ef419f45ba35dba80
 	 */
 #ifdef DLT_NFLOG
-	if (pcap->link_layer == DLT_NFLOG) {
+	if (pcap->link_type == DLT_NFLOG) {
 		fr_strerror_printf("NFLOG link-layer type filtering not implemented");
 
 		return 1;

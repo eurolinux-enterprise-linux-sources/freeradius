@@ -25,9 +25,9 @@
 #  "coa" list:
 #
 #	update coa {
-#	       &User-Name = "%{User-Name}"
-#	       &Acct-Session-Id = "%{Acct-Session-Id}"
-#	       &NAS-IP-Address = "%{NAS-IP-Address}"
+#	       User-Name = "%{User-Name}"
+#	       Acct-Session-Id = "%{Acct-Session-Id}"
+#	       NAS-IP-Address = "%{NAS-IP-Address}"
 #	}
 #
 #  And the CoA packet will be sent.  You can also send Disconnect
@@ -45,7 +45,7 @@
 #  CoA packet:
 #
 #	update control {
-#		&Send-CoA-Request = No
+#		Send-CoA-Request = No
 #	}
 #
 #  The default destination of a CoA packet is the NAS (or client)
@@ -80,7 +80,7 @@
 #  Disconnect packets), an IP address (or IPv6 address), a
 #  destination port, and a shared secret.
 #
-home_server example-coa {
+home_server localhost-coa {
 	type = coa
 
 	#
@@ -88,9 +88,7 @@ home_server example-coa {
 	#  with an ipaddr or ipv6addr.  It CANNOT point to a virtual
 	#  server.
 	#
-	#  Change this IP address to the IP address of the NAS.
-	#
-	ipaddr = 192.0.2.42
+	ipaddr = 127.0.0.1
 	port = 3799
 
 	#  This secret SHOULD NOT be the same as the shared
@@ -113,7 +111,7 @@ home_server_pool coa {
 	type = fail-over
 
 	# Point to the CoA server above.
-	home_server = example-coa
+	home_server = localhost-coa
 
 	#  CoA requests are run through the pre-proxy section.
 	#  CoA responses are run through the post-proxy section.
@@ -137,7 +135,7 @@ home_server_pool coa {
 server originate-coa.example.com {
   pre-proxy {
 	update proxy-request {
-		NAS-IP-Address = 192.0.2.42
+		NAS-IP-Address = 127.0.0.1
 	}
   }
 

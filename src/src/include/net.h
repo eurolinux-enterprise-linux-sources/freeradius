@@ -2,7 +2,7 @@
 #define FR_NET_H
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License, version 2 of the
+ *   it under the terms of the GNU General Public License, version 2 if the
  *   License as published by the Free Software Foundation.
  *
  *   This program is distributed in the hope that it will be useful,
@@ -73,8 +73,6 @@ typedef enum {
 #define IP_V(ip)	(((ip)->ip_vhl & 0xf0) >> 4)
 #define IP_HL(ip)       ((ip)->ip_vhl & 0x0f)
 
-#define IP_VHL(v, hl) ((v & 0x0f) << 4) | (hl & 0x0f)
-
 #define	I_DF		0x4000		//!< Dont fragment flag.
 #define IP_MF		0x2000		//!< More fragments flag.
 #define IP_OFFMASK	0x1fff		//!< Mask for fragmenting bits.
@@ -82,16 +80,16 @@ typedef enum {
 /*
  *	Structure of a DEC/Intel/Xerox or 802.3 Ethernet header.
  */
-typedef struct CC_HINT(__packed__) ethernet_header {
+struct ethernet_header {
 	uint8_t		ether_dst[ETHER_ADDR_LEN];
 	uint8_t		ether_src[ETHER_ADDR_LEN];
 	uint16_t	ether_type;
-} ethernet_header_t;
+};
 
 /*
  *	Structure of an internet header, naked of options.
  */
-typedef struct CC_HINT(__packed__) ip_header {
+typedef struct ip_header {
 	uint8_t		ip_vhl;		//!< Header length, version.
 
 	uint8_t		ip_tos;		//!< Type of service.
@@ -105,7 +103,7 @@ typedef struct CC_HINT(__packed__) ip_header {
 	struct in_addr	ip_src, ip_dst;	//!< Src and Dst address
 } ip_header_t;
 
-typedef struct CC_HINT(__packed__) ip_header6 {
+typedef struct ip_header6 {
 	uint32_t	ip_vtcfl;	//!< Version, traffic class, flow label.
 	uint16_t	ip_len;		//!< Payload length
 
@@ -119,24 +117,22 @@ typedef struct CC_HINT(__packed__) ip_header6 {
  *	UDP protocol header.
  *	Per RFC 768, September, 1981.
  */
-typedef struct CC_HINT(__packed__) udp_header {
+typedef struct udp_header {
 	uint16_t	src;		//!< Source port.
 	uint16_t	dst;		//!< Destination port.
 	uint16_t	len;		//!< UDP length.
 	uint16_t	checksum;	//!< UDP checksum.
 } udp_header_t;
 
-typedef struct CC_HINT(__packed__) radius_packet_t {
+typedef struct radius_packet_t {
 	uint8_t		code;
 	uint8_t		id;
 	uint8_t		length[2];
 	uint8_t		vector[AUTH_VECTOR_LEN];
-	uint8_t		data[];
+	uint8_t		data[1];
 } radius_packet_t;
 
-bool		fr_link_layer_supported(int link_layer);
-ssize_t		fr_link_layer_offset(uint8_t const *data, size_t len, int link_layer);
-uint16_t	fr_udp_checksum(uint8_t const *data, uint16_t len, uint16_t checksum,
-			 	struct in_addr const src_addr, struct in_addr const dst_addr);
-uint16_t	fr_iph_checksum(uint8_t const *data, uint8_t ihl);
+ssize_t fr_link_layer_offset(uint8_t const *data, size_t len, int link_type);
+uint16_t fr_udp_checksum(uint8_t const *data, uint16_t len, uint16_t checksum,
+			 struct in_addr const src_addr, struct in_addr const dst_addr);
 #endif /* FR_NET_H */

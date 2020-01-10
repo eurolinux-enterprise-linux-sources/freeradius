@@ -104,24 +104,24 @@ static int presufcmp(UNUSED void *instance,
 	/*
 	 *	If Strip-User-Name == No, then don't do any more.
 	 */
-	vp = fr_pair_find_by_num(check_pairs, PW_STRIP_USER_NAME, 0, TAG_ANY);
+	vp = pairfind(check_pairs, PW_STRIP_USER_NAME, 0, TAG_ANY);
 	if (vp && !vp->vp_integer) return ret;
 
 	/*
 	 *	See where to put the stripped user name.
 	 */
-	vp = fr_pair_find_by_num(check_pairs, PW_STRIPPED_USER_NAME, 0, TAG_ANY);
+	vp = pairfind(check_pairs, PW_STRIPPED_USER_NAME, 0, TAG_ANY);
 	if (!vp) {
 		/*
 		 *	If "request" is NULL, then the memory will be
 		 *	lost!
 		 */
-		vp = radius_pair_create(req->packet, &request, PW_STRIPPED_USER_NAME, 0);
+		vp = radius_paircreate(req->packet, &request, PW_STRIPPED_USER_NAME, 0);
 		if (!vp) return ret;
 		req->username = vp;
 	}
 
-	fr_pair_value_strcpy(vp, rest);
+	pairstrcpy(vp, rest);
 
 	return ret;
 }
@@ -166,7 +166,7 @@ static int responsecmp(UNUSED void *instance,
  */
 static int genericcmp(UNUSED void *instance,
 		      REQUEST *request,
-		      VALUE_PAIR *req,
+		      UNUSED VALUE_PAIR *req,
 		      VALUE_PAIR *check,
 		      UNUSED VALUE_PAIR *check_pairs,
 		      UNUSED VALUE_PAIR **reply_pairs)
@@ -183,13 +183,13 @@ static int genericcmp(UNUSED void *instance,
 		if (radius_xlat(value, sizeof(value), request, name, NULL, NULL) < 0) {
 			return 0;
 		}
-		vp = fr_pair_make(req, NULL, check->da->name, value, check->op);
+		vp = pairmake(req, NULL, check->da->name, value, check->op);
 
 		/*
 		 *	Paircmp returns 0 for failed comparison,
 		 *	1 for succeeded.
 		 */
-		rcode = fr_pair_cmp(check, vp);
+		rcode = paircmp(check, vp);
 
 		/*
 		 *	We're being called from radius_callback_compare,
@@ -209,7 +209,7 @@ static int genericcmp(UNUSED void *instance,
 		 *	returns 0 for matched, and 1 for didn't match.
 		 */
 		rcode = !rcode;
-		fr_pair_list_free(&vp);
+		pairfree(&vp);
 
 		return rcode;
 	}

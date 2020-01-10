@@ -27,26 +27,30 @@ RCSID("$Id$")
 #include <freeradius-devel/libradius.h>
 
 struct fr_fifo_t {
-	unsigned int num;
-	unsigned int first, last;
-	unsigned int max;
+	int num;
+	int first, last;
+	int max;
 	fr_fifo_free_t freeNode;
 
 	void *data[1];
 };
 
 
-fr_fifo_t *fr_fifo_create(TALLOC_CTX *ctx, int max, fr_fifo_free_t freeNode)
+fr_fifo_t *fr_fifo_create(int max, fr_fifo_free_t freeNode)
 {
 	fr_fifo_t *fi;
 
 	if ((max < 2) || (max > (1024 * 1024))) return NULL;
 
-	fi = talloc_zero_size(ctx, (sizeof(*fi) + (sizeof(fi->data[0])*max)));
+	fi = malloc(sizeof(*fi) + (sizeof(fi->data[0])*max));
 	if (!fi) return NULL;
-	talloc_set_type(fi, fr_fifo_t);
+
+	memset(fi, 0, sizeof(*fi));
 
 	fi->max = max;
+	fi->first = 0;
+	fi->last = 0;
+	fi->num = 0;
 	fi->freeNode = freeNode;
 
 	return fi;
@@ -54,13 +58,13 @@ fr_fifo_t *fr_fifo_create(TALLOC_CTX *ctx, int max, fr_fifo_free_t freeNode)
 
 void fr_fifo_free(fr_fifo_t *fi)
 {
-	unsigned int i;
+	int i;
 
 	if (!fi) return;
 
 	if (fi->freeNode) {
 		for (i = 0 ; i < fi->num; i++) {
-			unsigned int element;
+			int element;
 
 			element = i + fi->first;
 			if (element > fi->max) {
@@ -73,7 +77,7 @@ void fr_fifo_free(fr_fifo_t *fi)
 	}
 
 	memset(fi, 0, sizeof(*fi));
-	talloc_free(fi);
+	free(fi);
 }
 
 int fr_fifo_push(fr_fifo_t *fi, void *data)
@@ -112,7 +116,7 @@ void *fr_fifo_peek(fr_fifo_t *fi)
 	return fi->data[fi->first];
 }
 
-unsigned int fr_fifo_num_elements(fr_fifo_t *fi)
+int fr_fifo_num_elements(fr_fifo_t *fi)
 {
 	if (!fi) return 0;
 
@@ -133,7 +137,7 @@ int main(int argc, char **argv)
 	int i, j, array[MAX];
 	fr_fifo_t *fi;
 
-	fi = fr_fifo_create(NULL, MAX, NULL);
+	fi = fr_fifo_create(MAX, NULL);
 	if (!fi) fr_exit(1);
 
 	for (j = 0; j < 5; j++) {

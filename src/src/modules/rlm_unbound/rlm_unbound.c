@@ -1,8 +1,7 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version.
+ *   it under the terms of the GNU General Public License, version 2 if the
+ *   License as published by the Free Software Foundation.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -57,7 +56,7 @@ typedef struct rlm_unbound_t {
 static const CONF_PARSER module_config[] = {
 	{ "filename", FR_CONF_OFFSET(PW_TYPE_FILE_INPUT | PW_TYPE_REQUIRED, rlm_unbound_t, filename), "${modconfdir}/unbound/default.conf"  },
 	{ "timeout", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_unbound_t, timeout), "3000" },
-	CONF_PARSER_TERMINATOR
+	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
 /*
@@ -155,7 +154,7 @@ static int ub_common_wait(rlm_unbound_t *inst, REQUEST *request, char const *tag
 	iv = inst->timeout > 64 ? 64000 : inst->timeout * 1000;
 	ub_process(inst->ub);
 
-	for (waited = 0; (void*)*ub == (void *)inst; waited += iv, iv *= 2) {
+	for (waited = 0; (void*)*ub == (void *)inst; waited += iv, iv += iv) {
 
 		if (waited + iv > (useconds_t)inst->timeout * 1000) {
 			usleep(inst->timeout * 1000 - waited);
@@ -388,34 +387,6 @@ static void log_spew(UNUSED fr_event_list_t *el, UNUSED int sock, void *ctx)
 
 #endif
 
-static int mod_bootstrap(CONF_SECTION *conf, void *instance)
-{
-	rlm_unbound_t *inst = instance;
-
-	inst->name = cf_section_name2(conf);
-	if (!inst->name) {
-		inst->name = cf_section_name1(conf);
-	}
-
-	if (inst->timeout > 10000) {
-		cf_log_err_cs(conf, "timeout must be 0 to 10000");
-		return -1;
-	}
-
-	MEM(inst->xlat_a_name = talloc_typed_asprintf(inst, "%s-a", inst->name));
-	MEM(inst->xlat_aaaa_name = talloc_typed_asprintf(inst, "%s-aaaa", inst->name));
-	MEM(inst->xlat_ptr_name = talloc_typed_asprintf(inst, "%s-ptr", inst->name));
-
-	if (xlat_register(inst->xlat_a_name, xlat_a, NULL, inst) ||
-	    xlat_register(inst->xlat_aaaa_name, xlat_aaaa, NULL, inst) ||
-	    xlat_register(inst->xlat_ptr_name, xlat_ptr, NULL, inst)) {
-		cf_log_err_cs(conf, "Failed registering xlats");
-		return -1;
-	}
-
-	return 0;
-}
-
 static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
 	rlm_unbound_t *inst = instance;
@@ -434,9 +405,19 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	inst->log_fd = -1;
 	inst->log_pipe_in_use = false;
 
+	inst->name = cf_section_name2(conf);
+	if (!inst->name) {
+		inst->name = cf_section_name1(conf);
+	}
+
+	if (inst->timeout > 10000) {
+		ERROR("rlm_unbound (%s): timeout must be 0 to 10000", inst->name);
+		return -1;
+	}
+
 	inst->ub = ub_ctx_create();
 	if (!inst->ub) {
-		cf_log_err_cs(conf, "ub_ctx_create failed");
+		ERROR("rlm_unbound (%s): ub_ctx_create failed", inst->name);
 		return -1;
 	}
 
@@ -457,11 +438,11 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 
 	/*	Glean some default settings to match the main server.	*/
 	/*	TODO: debug_level can be changed at runtime. */
-	/*	TODO: log until fork when stdout or stderr and !rad_debug_lvl. */
+	/*	TODO: log until fork when stdout or stderr and !debug_flag. */
 	log_level = 0;
 
-	if (rad_debug_lvl > 0) {
-		log_level = rad_debug_lvl;
+	if (debug_flag > 0) {
+		log_level = debug_flag;
 
 	} else if (main_config.debug_level > 0) {
 		log_level = main_config.debug_level;
@@ -497,9 +478,9 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	res = ub_ctx_debuglevel(inst->ub, log_level);
 	if (res) goto error;
 
-	switch (default_log.dst) {
+	switch(default_log.dst) {
 	case L_DST_STDOUT:
-		if (!rad_debug_lvl) {
+		if (!debug_flag) {
 			log_dst = L_DST_NULL;
 			break;
 		}
@@ -508,7 +489,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		break;
 
 	case L_DST_STDERR:
-		if (!rad_debug_lvl) {
+		if (!debug_flag) {
 			log_dst = L_DST_NULL;
 			break;
 		}
@@ -590,7 +571,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		if (optval && strlen(optval)) {
 			log_dst = L_DST_FILES;
 
-		} else if (!rad_debug_lvl) {
+		} else if (!debug_flag) {
 			log_dst = L_DST_NULL;
 		}
 
@@ -604,13 +585,13 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		 * dup it so libunbound doesn't close it on us.
 		 */
 		if (log_fd == -1) {
-			cf_log_err_cs(conf, "Could not dup fd");
+			ERROR("rlm_unbound (%s): Could not dup fd", inst->name);
 			goto error_nores;
 		}
 
 		inst->log_stream = fdopen(log_fd, "w");
 		if (!inst->log_stream) {
-			cf_log_err_cs(conf, "error setting up log stream");
+			ERROR("rlm_unbound (%s): error setting up log stream", inst->name);
 			goto error_nores;
 		}
 
@@ -644,7 +625,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		 */
 		if (pipe(inst->log_pipe)) {
 		error_pipe:
-			cf_log_err_cs(conf, "Error setting up log pipes");
+			ERROR("rlm_unbound (%s): Error setting up log pipes", inst->name);
 			goto error_nores;
 		}
 
@@ -669,7 +650,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 			if (!inst->log_pipe_stream[0]) {
 				close(inst->log_pipe[0]);
 			}
-			cf_log_err_cs(conf, "Error setting up log stream");
+			ERROR("rlm_unbound (%s): Error setting up log stream", inst->name);
 			goto error_nores;
 		}
 
@@ -677,7 +658,7 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		if (res) goto error;
 
 		if (!fr_event_fd_insert(inst->el, 0, inst->log_pipe[0], log_spew, inst)) {
-			cf_log_err_cs(conf, "could not insert log fd");
+			ERROR("rlm_unbound (%s): could not insert log fd", inst->name);
 			goto error_nores;
 		}
 
@@ -701,17 +682,30 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	inst->log_fd = ub_fd(inst->ub);
 	if (inst->log_fd >= 0) {
 		if (!fr_event_fd_insert(inst->el, 0, inst->log_fd, ub_fd_handler, inst)) {
-			cf_log_err_cs(conf, "could not insert async fd");
+			ERROR("rlm_unbound (%s): could not insert async fd", inst->name);
 			inst->log_fd = -1;
 			goto error_nores;
 		}
 
 	}
 
+	MEM(inst->xlat_a_name = talloc_typed_asprintf(inst, "%s-a", inst->name));
+	MEM(inst->xlat_aaaa_name = talloc_typed_asprintf(inst, "%s-aaaa", inst->name));
+	MEM(inst->xlat_ptr_name = talloc_typed_asprintf(inst, "%s-ptr", inst->name));
+
+	if (xlat_register(inst->xlat_a_name, xlat_a, NULL, inst) ||
+	    xlat_register(inst->xlat_aaaa_name, xlat_aaaa, NULL, inst) ||
+	    xlat_register(inst->xlat_ptr_name, xlat_ptr, NULL, inst)) {
+		ERROR("rlm_unbound (%s): Failed registering xlats", inst->name);
+		xlat_unregister(inst->xlat_a_name, xlat_a, inst);
+		xlat_unregister(inst->xlat_aaaa_name, xlat_aaaa, inst);
+		xlat_unregister(inst->xlat_ptr_name, xlat_ptr, inst);
+		goto error_nores;
+	}
 	return 0;
 
  error:
-	cf_log_err_cs(conf, "%s", ub_strerror(res));
+	ERROR("rlm_unbound (%s): %s", inst->name, ub_strerror(res));
 
  error_nores:
 	if (log_fd > -1) close(log_fd);
@@ -722,6 +716,10 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 static int mod_detach(UNUSED void *instance)
 {
 	rlm_unbound_t *inst = instance;
+
+	xlat_unregister(inst->xlat_a_name, xlat_a, inst);
+	xlat_unregister(inst->xlat_aaaa_name, xlat_aaaa, inst);
+	xlat_unregister(inst->xlat_ptr_name, xlat_ptr, inst);
 
 	if (inst->log_fd >= 0) {
 		fr_event_fd_delete(inst->el, 0, inst->log_fd);
@@ -755,14 +753,14 @@ static int mod_detach(UNUSED void *instance)
 	return 0;
 }
 
-extern module_t rlm_unbound;
 module_t rlm_unbound = {
-	.magic		= RLM_MODULE_INIT,
-	.name		= "unbound",
-	.type		= RLM_TYPE_THREAD_SAFE,
-	.inst_size	= sizeof(rlm_unbound_t),
-	.config		= module_config,
-	.bootstrap	= mod_bootstrap,
-	.instantiate	= mod_instantiate,
-	.detach		= mod_detach
+	RLM_MODULE_INIT,
+	"unbound",
+	RLM_TYPE_THREAD_SAFE,		/* type */
+	sizeof(rlm_unbound_t),
+	module_config,
+	mod_instantiate,		/* instantiation */
+	mod_detach,			/* detach */
+	/* This module does not directly interact with requests */
+	{ NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
 };

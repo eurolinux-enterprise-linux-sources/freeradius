@@ -31,10 +31,6 @@ if test x$with_[]modname != xno; then
 
 		if test x$libcurl_protocol_HTTPS != xyes || test x$libcurl_feature_SSL != xyes; then
 			AC_MSG_WARN([silently building without HTTPS support. requires: libcurl_protocol_https.])
-		else
-            AC_MSG_NOTICE([curl-config's cflags were \"${LIBCURL_CPPFLAGS}\"])
-		    LIBCURL_CPPFLAGS=$(echo "$LIBCURL_CPPFLAGS" | sed 's/-I[ ]*/-isystem /g')
-		    AC_MSG_NOTICE([Sanitized cflags are \"$(echo "${LIBCURL_CPPFLAGS}" | sed 's/-I[ ]*/-isystem /g')\"])
 		fi
 	fi
 
@@ -99,16 +95,8 @@ if test x$with_[]modname != xno; then
 	smart_try_dir="$jsonc_include_dir"
 	FR_SMART_CHECK_INCLUDE([json/json.h])
 	if test "x$ac_cv_header_json_json_h" != "xyes"; then
-		FR_SMART_CHECK_INCLUDE([json-c/json.h])
-		if test "x$ac_cv_header_jsonmc_json_h" != "xyes"; then
-			have_json="no"
-			AC_MSG_WARN([json-c headers not found. Use --with-jsonc-include-dir=<path>.])
-			fail="$fail json.h"
-		else
-			AC_DEFINE([HAVE_JSONMC_JSON_H],[1],[json.h is at json-c/json.h relative to include dir])
-		fi
-	else
-		AC_DEFINE([HAVE_JSON_JSON_H],[1],[json.h is at json/json.h relative to include dir])
+		have_json="no"
+		AC_MSG_WARN([json-c headers not found. Use --with-jsonc-include-dir=<path>.])
 	fi
 
 	dnl ############################################################
@@ -164,7 +152,7 @@ if test x"$fail" != x""; then
 fi
 
 mod_ldflags="$LIBCURL $SMART_LIBS"
-mod_cflags="$LIBCURL_CPPFLAGS $SMART_CPPFLAGS"
+mod_cflags="$SMART_CPPFLAGS"
 
 AC_SUBST(mod_cflags)
 AC_SUBST(mod_ldflags)

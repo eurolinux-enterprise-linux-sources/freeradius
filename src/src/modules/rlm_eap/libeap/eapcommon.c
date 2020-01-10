@@ -199,11 +199,11 @@ int eap_basic_compose(RADIUS_PACKET *packet, eap_packet_t *reply)
 	}
 	eap_packet = (eap_packet_raw_t *)reply->packet;
 
-	fr_pair_delete_by_num(&(packet->vps), PW_EAP_MESSAGE, 0, TAG_ANY);
+	pairdelete(&(packet->vps), PW_EAP_MESSAGE, 0, TAG_ANY);
 
 	vp = eap_packet2vp(packet, eap_packet);
 	if (!vp) return RLM_MODULE_INVALID;
-	fr_pair_add(&(packet->vps), vp);
+	pairadd(&(packet->vps), vp);
 
 	/*
 	 *	EAP-Message is always associated with
@@ -212,18 +212,18 @@ int eap_basic_compose(RADIUS_PACKET *packet, eap_packet_t *reply)
 	 *	Don't add a Message-Authenticator if it's already
 	 *	there.
 	 */
-	vp = fr_pair_find_by_num(packet->vps, PW_MESSAGE_AUTHENTICATOR, 0, TAG_ANY);
+	vp = pairfind(packet->vps, PW_MESSAGE_AUTHENTICATOR, 0, TAG_ANY);
 	if (!vp) {
-		vp = fr_pair_afrom_num(packet, PW_MESSAGE_AUTHENTICATOR, 0);
-		vp->vp_length = AUTH_VECTOR_LEN;
-		vp->vp_octets = talloc_zero_array(vp, uint8_t, vp->vp_length);
+		vp = paircreate(packet, PW_MESSAGE_AUTHENTICATOR, 0);
+		vp->length = AUTH_VECTOR_LEN;
+		vp->vp_octets = talloc_zero_array(vp, uint8_t, vp->length);
 
-		fr_pair_add(&(packet->vps), vp);
+		pairadd(&(packet->vps), vp);
 	}
 
 	/* Set request reply code, but only if it's not already set. */
 	rcode = RLM_MODULE_OK;
-	if (!packet->code) switch (reply->code) {
+	if (!packet->code) switch(reply->code) {
 	case PW_EAP_RESPONSE:
 	case PW_EAP_SUCCESS:
 		packet->code = PW_CODE_ACCESS_ACCEPT;
@@ -270,12 +270,12 @@ VALUE_PAIR *eap_packet2vp(RADIUS_PACKET *packet, eap_packet_raw_t const *eap)
 		size = total;
 		if (size > 253) size = 253;
 
-		vp = fr_pair_afrom_num(packet, PW_EAP_MESSAGE, 0);
+		vp = paircreate(packet, PW_EAP_MESSAGE, 0);
 		if (!vp) {
-			fr_pair_list_free(&head);
+			pairfree(&head);
 			return NULL;
 		}
-		fr_pair_value_memcpy(vp, ptr, size);
+		pairmemcpy(vp, ptr, size);
 
 		fr_cursor_insert(&out, vp);
 
@@ -306,17 +306,17 @@ eap_packet_raw_t *eap_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 	/*
 	 *	Get only EAP-Message attribute list
 	 */
-	first = fr_pair_find_by_num(vps, PW_EAP_MESSAGE, 0, TAG_ANY);
+	first = pairfind(vps, PW_EAP_MESSAGE, 0, TAG_ANY);
 	if (!first) {
-		fr_strerror_printf("EAP-Message not found");
+		DEBUG("rlm_eap: EAP-Message not found");
 		return NULL;
 	}
 
 	/*
 	 *	Sanity check the length before doing anything.
 	 */
-	if (first->vp_length < 4) {
-		fr_strerror_printf("EAP packet is too short");
+	if (first->length < 4) {
+		DEBUG("rlm_eap: EAP packet is too short");
 		return NULL;
 	}
 
@@ -331,7 +331,7 @@ eap_packet_raw_t *eap_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 	 *	Take out even more weird things.
 	 */
 	if (len < 4) {
-		fr_strerror_printf("EAP packet has invalid length (less than 4 bytes)");
+		DEBUG("rlm_eap: EAP packet has invalid length");
 		return NULL;
 	}
 
@@ -341,11 +341,10 @@ eap_packet_raw_t *eap_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 	total_len = 0;
 	fr_cursor_init(&cursor, &first);
 	while ((i = fr_cursor_next_by_num(&cursor, PW_EAP_MESSAGE, 0, TAG_ANY))) {
-		total_len += i->vp_length;
+		total_len += i->length;
 
 		if (total_len > len) {
-			fr_strerror_printf("Malformed EAP packet.  Length in packet header %i, "
-					   "does not match actual length %i", len, total_len);
+			DEBUG("rlm_eap: Malformed EAP packet.  Length in packet header does not match actual length");
 			return NULL;
 		}
 	}
@@ -354,8 +353,7 @@ eap_packet_raw_t *eap_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 	 *	If the length is SMALLER, die, too.
 	 */
 	if (total_len < len) {
-		fr_strerror_printf("Malformed EAP packet.  Length in packet header does not "
-				   "match actual length");
+		DEBUG("rlm_eap: Malformed EAP packet.  Length in packet header does not match actual length");
 		return NULL;
 	}
 
@@ -375,8 +373,8 @@ eap_packet_raw_t *eap_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 	/* RADIUS ensures order of attrs, so just concatenate all */
 	fr_cursor_first(&cursor);
 	while ((i = fr_cursor_next_by_num(&cursor, PW_EAP_MESSAGE, 0, TAG_ANY))) {
-		memcpy(ptr, i->vp_strvalue, i->vp_length);
-		ptr += i->vp_length;
+		memcpy(ptr, i->vp_strvalue, i->length);
+		ptr += i->length;
 	}
 
 	return eap_packet;
@@ -390,12 +388,12 @@ void eap_add_reply(REQUEST *request,
 {
 	VALUE_PAIR *vp;
 
-	vp = pair_make_reply(name, NULL, T_OP_EQ);
+	vp = pairmake_reply(name, NULL, T_OP_EQ);
 	if (!vp) {
 		REDEBUG("Did not create attribute %s: %s\n",
 			name, fr_strerror());
 		return;
 	}
 
-	fr_pair_value_memcpy(vp, value, len);
+	pairmemcpy(vp, value, len);
 }

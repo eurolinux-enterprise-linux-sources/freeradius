@@ -1,2 +1,2 @@
 radiusd-to-freeradius.diff
-disable-dhcp-bydefault.diff
+disable-openssl-check.diff

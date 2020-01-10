@@ -1,6 +1,6 @@
 [Unit]
 Description=FreeRADIUS high performance RADIUS server.
-After=syslog.target network.target ipa.service dirsrv.target krb5kdc.service
+After=syslog.target network.target
 
 [Service]
 Type=forking

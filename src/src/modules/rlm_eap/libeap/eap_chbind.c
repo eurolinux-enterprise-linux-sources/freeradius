@@ -26,6 +26,8 @@ RCSID("$Id$")
 
 #include "eap_chbind.h"
 
+#define MAX_PACKET_LEN		4096
+
 static bool chbind_build_response(REQUEST *request, CHBIND_REQ *chbind)
 {
 	int length;
@@ -44,7 +46,7 @@ static bool chbind_build_response(REQUEST *request, CHBIND_REQ *chbind)
 		if (vp->da->flags.encrypt != FLAG_ENCRYPT_NONE) continue;
 		if (!vp->da->vendor && (vp->da->attr == PW_MESSAGE_AUTHENTICATOR)) continue;
 
-		total += 2 + vp->vp_length;
+		total += 2 + vp->length;
 	}
 
 	/*
@@ -62,7 +64,7 @@ static bool chbind_build_response(REQUEST *request, CHBIND_REQ *chbind)
 	 *	Set the response code.  Default to "fail" if none was
 	 *	specified.
 	 */
-	vp = fr_pair_find_by_num(request->config, PW_CHBIND_RESPONSE_CODE, 0, TAG_ANY);
+	vp = pairfind(request->config_items, PW_CHBIND_RESPONSE_CODE, 0, TAG_ANY);
 	if (vp) {
 		ptr[0] = vp->vp_integer;
 	} else {
@@ -76,8 +78,10 @@ static bool chbind_build_response(REQUEST *request, CHBIND_REQ *chbind)
 	ptr[2] = total & 0xff;
 	ptr[3] = CHBIND_NSID_RADIUS;
 
-	RDEBUG("Sending chbind response: code %i", (int )(ptr[0]));
-	rdebug_pair_list(L_DBG_LVL_1, request, request->reply->vps, NULL);
+	if ((debug_flag > 0) && fr_log_fp) {
+		RDEBUG("Sending chbind response: code %i", (int )(ptr[0]));
+		debug_pair_list(request->reply->vps);
+	}
 
 	/* Encode the chbind attributes into the response */
 	ptr += 4;
@@ -166,12 +170,12 @@ PW_CODE chbind_process(REQUEST *request, CHBIND_REQ *chbind)
 
 	/* Set-up the fake request */
 	fake = request_alloc_fake(request);
-	fr_pair_make(fake->packet, &fake->packet->vps, "Freeradius-Proxied-To", "127.0.0.1", T_OP_EQ);
+	pairmake_packet("Freeradius-Proxied-To", "127.0.0.1", T_OP_EQ);
 
 	/* Add the username to the fake request */
 	if (chbind->username) {
-		vp = fr_pair_copy(fake->packet, chbind->username);
-		fr_pair_add(&fake->packet->vps, vp);
+		vp = paircopyvp(fake->packet, chbind->username);
+		pairadd(&fake->packet->vps, vp);
 		fake->username = vp;
 	}
 
@@ -182,8 +186,6 @@ PW_CODE chbind_process(REQUEST *request, CHBIND_REQ *chbind)
 	/* Add the channel binding attributes to the fake packet */
 	data_len = chbind_get_data(chbind->request, CHBIND_NSID_RADIUS, &attr_data);
 	if (data_len) {
-		rad_assert(data_len <= talloc_array_length(chbind->request));
-
 		while (data_len > 0) {
 			int attr_len = rad_attr2vp(fake->packet, NULL, NULL, NULL, attr_data, data_len, &vp);
 			if (attr_len <= 0) {
@@ -193,7 +195,7 @@ PW_CODE chbind_process(REQUEST *request, CHBIND_REQ *chbind)
 				return PW_CODE_ACCESS_ACCEPT;
 			}
 			if (vp) {
-				fr_pair_add(&fake->packet->vps, vp);
+				pairadd(&fake->packet->vps, vp);
 			}
 			attr_data += attr_len;
 			data_len -= attr_len;
@@ -242,7 +244,7 @@ chbind_packet_t *eap_chbind_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 	chbind_packet_t *packet;
 	vp_cursor_t cursor;
 
-	first = fr_pair_find_by_num(vps, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY);
+	first = pairfind(vps, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY);
 	if (!first) return NULL;
 
 	/*
@@ -252,7 +254,7 @@ chbind_packet_t *eap_chbind_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 	for (vp =fr_cursor_init(&cursor, &first);
 	     vp != NULL;
 	     vp = fr_cursor_next_by_num(&cursor, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY)) {
-		length += vp->vp_length;
+		length += vp->length;
 	}
 
 	if (length < 4) {
@@ -273,22 +275,22 @@ chbind_packet_t *eap_chbind_vp2packet(TALLOC_CTX *ctx, VALUE_PAIR *vps)
 	for (vp = fr_cursor_init(&cursor, &first);
 	     vp != NULL;
 	     vp = fr_cursor_next_by_num(&cursor, PW_UKERNA_CHBIND, VENDORPEC_UKERNA, TAG_ANY)) {
-		memcpy(ptr, vp->vp_octets, vp->vp_length);
-		ptr += vp->vp_length;
+		memcpy(ptr, vp->vp_octets, vp->length);
+		ptr += vp->length;
 	}
 
 	return packet;
 }
 
-VALUE_PAIR *eap_chbind_packet2vp(REQUEST *request, chbind_packet_t *packet)
+VALUE_PAIR *eap_chbind_packet2vp(REQUEST *request, const chbind_packet_t *packet)
 {
 	VALUE_PAIR	*vp;
 
 	if (!packet) return NULL; /* don't produce garbage */
 
-	vp = fr_pair_afrom_num(request->packet, PW_UKERNA_CHBIND, VENDORPEC_UKERNA);
+	vp = paircreate(request->packet, PW_UKERNA_CHBIND, VENDORPEC_UKERNA);
 	if (!vp) return NULL;
-	fr_pair_value_memcpy(vp, (uint8_t *) packet, talloc_array_length((uint8_t *)packet));
+	pairmemcpy(vp, (const uint8_t *) packet, talloc_array_length(packet));
 
 	return vp;
 }

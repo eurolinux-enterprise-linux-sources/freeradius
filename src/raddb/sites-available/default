@@ -84,40 +84,16 @@ listen {
 	#  source IP address for packets sent to a home server, the
 	#  proxy listeners are automatically created.
 
-	#  ipaddr/ipv4addr/ipv6addr - IP address on which to listen.
-	#  If multiple ones are listed, only the first one will
-	#  be used, and the others will be ignored.
-	#
-	#  The configuration options accept the following syntax:
-	#
-	#  ipv4addr - IPv4 address (e.g.192.0.2.3)
-	#  	    - wildcard (i.e. *)
-	#  	    - hostname (radius.example.com)
-	#  	      Only the A record for the host name is used.
-	#	      If there is no A record, an error is returned,
-	#	      and the server fails to start.
-	#
-	#  ipv6addr - IPv6 address (e.g. 2001:db8::1)
-	#  	    - wildcard (i.e. *)
-	#  	    - hostname (radius.example.com)
-	#  	      Only the AAAA record for the host name is used.
-	#	      If there is no AAAA record, an error is returned,
-	#	      and the server fails to start.
-	#
-	#  ipaddr   - IPv4 address as above
-	#  	    - IPv6 address as above
-	#  	    - wildcard (i.e. *), which means IPv4 wildcard.
-	#	    - hostname
-	#	      If there is only one A or AAAA record returned
-	#	      for the host name, it is used.
-	#	      If multiple A or AAAA records are returned
-	#	      for the host name, only the first one is used.
-	#	      If both A and AAAA records are returned
-	#	      for the host name, only the A record is used.
-	#
-	# ipv4addr = *
-	# ipv6addr = *
+	#  IP address on which to listen.
+	#  Allowed values are:
+	#	dotted quad (1.2.3.4)
+	#       hostname    (radius.example.com)
+	#       wildcard    (*)
 	ipaddr = *
+
+	#  OR, you can use an IPv6 address, but not both
+	#  at the same time.
+#	ipv6addr = ::	# any.  ::1 == localhost
 
 	#  Port on which to listen.
 	#  Allowed values are:
@@ -281,22 +257,12 @@ authorize {
 	filter_username
 
 	#
-	#  Some broken equipment sends passwords with embedded zeros.
-	#  i.e. the debug output will show
-	#
-	#	User-Password = "password\000\000"
-	#
-	#  This policy will fix it to just be "password".
-	#
-#	filter_password
-
-	#
 	#  The preprocess module takes care of sanitizing some bizarre
 	#  attributes in the request, and turning them into attributes
 	#  which are more standard.
 	#
-	#  It takes care of processing the 'raddb/mods-config/preprocess/hints' 
-	#  and the 'raddb/mods-config/preprocess/huntgroups' files.
+	#  It takes care of processing the 'raddb/hints' and the
+	#  'raddb/huntgroups' files.
 	preprocess
 
 	#  If you intend to use CUI and you require that the Operator-Name
@@ -313,7 +279,8 @@ authorize {
 
 	#
 	#  If you want to have a log of authentication requests,
-	#  un-comment the following line.
+	#  un-comment the following line, and the 'detail auth_log'
+	#  section, above.
 #	auth_log
 
 	#
@@ -366,42 +333,37 @@ authorize {
 	#  It also sets the EAP-Type attribute in the request
 	#  attribute list to the EAP type from the packet.
 	#
-	#  The EAP module returns "ok" or "updated" if it is not yet ready
-	#  to authenticate the user.  The configuration below checks for
-	#  "ok", and stops processing the "authorize" section if so.
+	#  As of 2.0, the EAP module returns "ok" in the authorize stage
+	#  for TTLS and PEAP.  In 1.x, it never returned "ok" here, so
+	#  this change is compatible with older configurations.
 	#
-	#  Any LDAP and/or SQL servers will not be queried for the
-	#  initial set of packets that go back and forth to set up
-	#  TTLS or PEAP.
-	#
-	#  The "updated" check is commented out for compatibility with
-	#  previous versions of this configuration, but you may wish to
-	#  uncomment it as well; this will further reduce the number of
-	#  LDAP and/or SQL queries for TTLS or PEAP.
+	#  The example below uses module failover to avoid querying all
+	#  of the following modules if the EAP module returns "ok".
+	#  Therefore, your LDAP and/or SQL servers will not be queried
+	#  for the many packets that go back and forth to set up TTLS
+	#  or PEAP.  The load on those servers will therefore be reduced.
 	#
 	eap {
 		ok = return
-#		updated = return
 	}
 
 	#
 	#  Pull crypt'd passwords from /etc/passwd or /etc/shadow,
 	#  using the system API's to get the password.  If you want
 	#  to read /etc/passwd or /etc/shadow directly, see the
-	#  mods-available/passwd module.
+	#  passwd module in radiusd.conf.
 	#
 #	unix
 
 	#
-	#  Read the 'users' file.  In v3, this is located in
-	#  raddb/mods-config/files/authorize
+	#  Read the 'users' file
 	files
 
 	#
 	#  Look in an SQL database.  The schema of the database
 	#  is meant to mirror the "users" file.
 	#
-	#  See "Authorization Queries" in mods-available/sql
+	#  See "Authorization Queries" in sql.conf
 	-sql
 
 	#
@@ -496,11 +458,6 @@ authenticate {
 	Auth-Type MS-CHAP {
 		mschap
 	}
-
-	#
-	#  For old names, too.
-	#
-	mschap
 
 	#
 	#  If you have a Cisco SIP server authenticating against
@@ -636,7 +593,7 @@ accounting {
 	#
 	#  Log traffic to an SQL database.
 	#
-	#  See "Accounting queries" in mods-available/sql
+	#  See "Accounting queries" in sql.conf
 	-sql
 
 	#
@@ -684,7 +641,7 @@ session {
 #	radutmp
 
 	#
-	#  See "Simultaneous Use Checking Queries" in mods-available/sql
+	#  See "Simultaneous Use Checking Queries" in sql.conf
 #	sql
 }
 
@@ -693,30 +650,6 @@ session {
 #  Once we KNOW that the user has been authenticated, there are
 #  additional steps we can take.
 post-auth {
-	#
-	#  If you need to have a State attribute, you can
-	#  add it here.  e.g. for later CoA-Request with
-	#  State, and Service-Type = Authorize-Only.
-	#
-#	if (!&reply:State) {
-#		update reply {
-#			State := "0x%{randstr:16h}"
-#		}
-#	}
-
-	#
-	#  For EAP-TTLS and PEAP, add the cached attributes to the reply.
-	#  The "session-state" attributes are automatically cached when
-	#  an Access-Challenge is sent, and automatically retrieved
-	#  when an Access-Request is received.
-	#
-	#  The session-state attributes are automatically deleted after
-	#  an Access-Reject or Access-Accept is sent.
-	#
-	update {
-		&reply: += &session-state:
-	}
-
 	#  Get an address from the IP Pool.
 #	main_pool
 
@@ -734,7 +667,7 @@ post-auth {
 	#
 	#  After authenticating the user, do another SQL query.
 	#
-	#  See "Authentication Logging Queries" in mods-available/sql
+	#  See "Authentication Logging Queries" in sql.conf
 	-sql
 
 	#
@@ -820,9 +753,9 @@ post-auth {
 	#
 	#  Uncomment the next few lines to copy the required data into
 	#  the EAP-Key-Name attribute
-#	if (&reply:EAP-Session-Id) {
+#	if (reply:EAP-Session-Id) {
 #		update reply {
-#			EAP-Key-Name := &reply:EAP-Session-Id
+#			EAP-Key-Name := "%{reply:EAP-Session-Id}"
 #		}
 #	}
 
@@ -835,8 +768,6 @@ post-auth {
 	#
 	#  Add the ldap module name (or instance) if you have set
 	#  'edir_account_policy_check = yes' in the ldap module configuration
-	#
-	#  The "session-state" attributes are not available here.
 	#
 	Post-Auth-Type REJECT {
 		# log failed authentications in SQL, too.
@@ -851,15 +782,6 @@ post-auth {
 		#  Remove reply message if the response contains an EAP-Message
 		remove_reply_message_if_eap
 	}
-
-	#
-	#  Filter access challenges.
-	#
-	Post-Auth-Type Challenge {
-#		remove_reply_message_if_eap
-#		attr_filter.access_challenge.post-auth
-	}
-
 }
 
 #
@@ -943,7 +865,7 @@ post-proxy {
 	#  Accounting-Requests from the NAS, but only writes
 	#  accounting packets to disk if the home server is down.
 	#
-#	Post-Proxy-Type Fail-Accounting {
+#	Post-Proxy-Type Fail {
 #			detail
 #	}
 }

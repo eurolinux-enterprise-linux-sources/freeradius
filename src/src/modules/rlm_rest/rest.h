@@ -14,7 +14,7 @@
  *   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-/**
+/*
  * $Id$
  *
  * @brief Function prototypes and datatypes for the REST (HTTP) transport.
@@ -28,15 +28,15 @@ RCSIDH(other_h, "$Id$")
 #include <freeradius-devel/connection.h>
 #include "config.h"
 
+#ifdef HAVE_JSON_JSONH
+#define HAVE_JSON
+#endif
+
 #define CURL_NO_OLDIES 1
 #include <curl/curl.h>
 
 #ifdef HAVE_JSON
-#  if defined(HAVE_JSONMC_JSON_H)
-#    include <json-c/json.h>
-#  elif defined(HAVE_JSON_JSON_H)
-#    include <json/json.h>
-#  endif
+#include <json/json.h>
 #endif
 
 #define REST_URI_MAX_LEN		2048
@@ -49,7 +49,6 @@ typedef enum {
 	HTTP_METHOD_GET,
 	HTTP_METHOD_POST,
 	HTTP_METHOD_PUT,
-	HTTP_METHOD_PATCH,
 	HTTP_METHOD_DELETE,
 	HTTP_METHOD_CUSTOM		//!< Must always come last, should not be in method table
 } http_method_t;
@@ -115,7 +114,6 @@ typedef struct rlm_rest_section_t {
 	char const		*body_str;	//!< The string version of the encoding/content type.
 	http_body_type_t	body;		//!< What encoding type should be used.
 
-	char const		*force_to_str;	//!< Force decoding with this decoder.
 	http_body_type_t	force_to;	//!< Override the Content-Type header in the response
 						//!< to force decoding as a particular type.
 
@@ -136,8 +134,7 @@ typedef struct rlm_rest_section_t {
 	bool			tls_check_cert;
 	bool			tls_check_cert_cn;
 
-	struct timeval		timeout_tv;	//!< Timeout timeval.
-	long			timeout;	//!< Timeout in ms.
+	uint32_t		timeout;	//!< Timeout passed to CURL.
 	uint32_t		chunk;		//!< Max chunk-size (mainly for testing the encoders)
 } rlm_rest_section_t;
 
@@ -150,10 +147,7 @@ typedef struct rlm_rest_t {
 	char const		*connect_uri;	//!< URI we attempt to connect to, to pre-establish
 						//!< TCP connections.
 
-	struct timeval		connect_timeout_tv;	//!< Connection timeout timeval.
-	long			connect_timeout;	//!< Connection timeout ms.
-
-	fr_connection_pool_t	*pool;		//!< Pointer to the connection pool.
+	fr_connection_pool_t	*conn_pool;	//!< Pointer to the connection pool.
 
 	rlm_rest_section_t	authorize;	//!< Configuration specific to authorisation.
 	rlm_rest_section_t	authenticate;	//!< Configuration specific to authentication.
@@ -161,9 +155,6 @@ typedef struct rlm_rest_t {
 	rlm_rest_section_t	checksimul;	//!< Configuration specific to simultaneous session
 						//!< checking.
 	rlm_rest_section_t	post_auth;	//!< Configuration specific to Post-auth
-#ifdef WITH_COA
-	rlm_rest_section_t	recv_coa;		//!< Configuration specific to recv-coa
-#endif
 } rlm_rest_t;
 
 /*
@@ -278,8 +269,6 @@ int rest_request_perform(rlm_rest_t *instance,
 int rest_response_decode(rlm_rest_t *instance,
 			UNUSED rlm_rest_section_t *section, REQUEST *request,
 			void *handle);
-
-void rest_response_error(REQUEST *request, rlm_rest_handle_t *handle);
 
 void rest_request_cleanup(rlm_rest_t *instance, rlm_rest_section_t *section,
 			  void *handle);

@@ -1,8 +1,7 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version.
+ *   it under the terms of the GNU General Public License, version 2 if the
+ *   License as published by the Free Software Foundation.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -29,7 +28,7 @@ RCSID("$Id$")
 #include <freeradius-devel/rad_assert.h>
 
 #ifdef INADDR_ANY
-#  undef INADDR_ANY
+#undef INADDR_ANY
 #endif
 #include <EXTERN.h>
 #include <perl.h>
@@ -74,7 +73,6 @@ typedef struct rlm_perl_t {
 	char const	*xlat_name;
 	char const	*perl_flags;
 	PerlInterpreter	*perl;
-	bool		perl_parsed;
 	pthread_key_t	*thread_key;
 
 #ifdef USE_ITHREADS
@@ -116,7 +114,8 @@ static const CONF_PARSER module_config[] = {
 	{ "func_start_accounting", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_perl_t, func_start_accounting), NULL },
 
 	{ "func_stop_accounting", FR_CONF_OFFSET(PW_TYPE_STRING, rlm_perl_t, func_stop_accounting), NULL },
-	CONF_PARSER_TERMINATOR
+
+	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
 /*
@@ -124,11 +123,9 @@ static const CONF_PARSER module_config[] = {
  */
 EXTERN_C void boot_DynaLoader(pTHX_ CV* cv);
 
-static int perl_sys_init3_called = 0;
-
 #ifdef USE_ITHREADS
-#  define dl_librefs "DynaLoader::dl_librefs"
-#  define dl_modules "DynaLoader::dl_modules"
+#define dl_librefs "DynaLoader::dl_librefs"
+#define dl_modules "DynaLoader::dl_modules"
 static void rlm_perl_clear_handles(pTHX)
 {
 	AV *librefs = get_av(dl_librefs, false);
@@ -152,16 +149,20 @@ static void **rlm_perl_get_handles(pTHX)
 
 	handles = (void **)rad_malloc(sizeof(void *) * (AvFILL(librefs)+2));
 
-	for (i = 0; i <= AvFILL(librefs); i++) {
+	for (i=0; i<=AvFILL(librefs); i++) {
 		void *handle;
 		SV *handle_sv = *av_fetch(librefs, i, false);
-		if (!handle_sv) {
-			ERROR("Could not fetch $%s[%d]!", dl_librefs, (int)i);
+
+		if(!handle_sv) {
+			ERROR("Could not fetch $%s[%d]!\n",
+			       dl_librefs, (int)i);
 			continue;
 		}
 		handle = (void *)SvIV(handle_sv);
 
-		if (handle) handles[i] = handle;
+		if (handle) {
+			handles[i] = handle;
+		}
 	}
 
 	av_clear(modules);
@@ -180,8 +181,8 @@ static void rlm_perl_close_handles(void **handles)
 		return;
 	}
 
-	for (i = 0; handles[i]; i++) {
-		DEBUG("Close %p", handles[i]);
+	for (i=0; handles[i]; i++) {
+		DEBUG("close %p\n", handles[i]);
 		dlclose(handles[i]);
 	}
 
@@ -207,7 +208,7 @@ static void rlm_perl_destruct(PerlInterpreter *perl)
 	 * FIXME: This shouldn't happen
 	 *
 	 */
-	while (PL_scopestack_ix > 1) {
+	while (PL_scopestack_ix > 1 ){
 		LEAVE;
 	}
 
@@ -231,7 +232,7 @@ static void rlm_destroy_perl(PerlInterpreter *perl)
 /* Create Key */
 static void rlm_perl_make_key(pthread_key_t *key)
 {
-	pthread_key_create(key, (void (*)(void *))rlm_destroy_perl);
+	pthread_key_create(key, (void*)rlm_destroy_perl);
 }
 
 static PerlInterpreter *rlm_perl_clone(PerlInterpreter *perl, pthread_key_t *key)
@@ -250,9 +251,9 @@ static PerlInterpreter *rlm_perl_clone(PerlInterpreter *perl, pthread_key_t *key
 	{
 		dTHXa(interp);
 	}
-#  if PERL_REVISION >= 5 && PERL_VERSION <8
+#if PERL_REVISION >= 5 && PERL_VERSION <8
 	call_pv("CLONE",0);
-#  endif
+#endif
 	ptr_table_free(PL_ptr_table);
 	PL_ptr_table = NULL;
 
@@ -272,9 +273,9 @@ static PerlInterpreter *rlm_perl_clone(PerlInterpreter *perl, pthread_key_t *key
 #endif
 
 /*
- *	This is wrapper for radlog
- *	Now users can call radiusd::radlog(level,msg) wich is the same
- *	as calling radlog from C code.
+ * This is wrapper for radlog
+ * Now users can call radiusd::radlog(level,msg) wich is the same
+ * calling radlog from C code.
  */
 static XS(XS_radiusd_radlog)
 {
@@ -297,44 +298,6 @@ static XS(XS_radiusd_radlog)
 	XSRETURN_NO;
 }
 
-/*
- *	This is a wraper for radius_axlat
- *	Now users are able to get data that is accessible only via xlat
- *	e.g. %{client:...}
- *	Call syntax is radiusd::xlat(string), string will be handled the
- *	same way it is described in EXPANSIONS section of man unlang
- */
-static XS(XS_radiusd_xlat)
-{
-	dXSARGS;
-	char *in_str;
-	char *expanded;
-	ssize_t slen;
-	SV *rad_requestp_sv;
-	REQUEST *request;
-
-	if (items != 1) croak("Usage: radiusd::xlat(string)");
-
-	rad_requestp_sv = get_sv("RAD___REQUESTP", 0);
-	if (rad_requestp_sv == NULL) croak("Can not evalue xlat, RAD___REQUESTP is not set!");
-
-	request = INT2PTR(REQUEST *, SvIV(rad_requestp_sv));
-
-	in_str = (char *) SvPV(ST(0), PL_na);
-	expanded = NULL;
-	slen = radius_axlat(&expanded, request, in_str, NULL, NULL);
-
-	if (slen < 0) {
-		REDEBUG("Error parsing xlat '%s'", in_str);
-		XSRETURN_UNDEF;
-	}
-
-
-	XST_mPV(0, expanded);
-	talloc_free(expanded);
-	XSRETURN(1);
-}
-
 static void xs_init(pTHX)
 {
 	char const *file = __FILE__;
@@ -343,11 +306,10 @@ static void xs_init(pTHX)
 	newXS("DynaLoader::boot_DynaLoader", boot_DynaLoader, file);
 
 	newXS("radiusd::radlog",XS_radiusd_radlog, "rlm_perl");
-	newXS("radiusd::xlat",XS_radiusd_xlat, "rlm_perl");
 }
 
 /*
- *	The xlat function
+ * The xlat function
  */
 static ssize_t perl_xlat(void *instance, REQUEST *request, char const *fmt, char *out, size_t freespace)
 {
@@ -451,7 +413,7 @@ static void perl_parse_config(CONF_SECTION *cs, int lvl, HV *rad_hv)
 		 *  Then recursively call perl_parse_config with this section and the new HV.
 		 */
 		if (cf_item_is_section(ci)) {
-			CONF_SECTION	*sub_cs = cf_item_to_section(ci);
+			CONF_SECTION	*sub_cs = cf_itemtosection(ci);
 			char const	*key = cf_section_name1(sub_cs); /* hash key */
 			HV		*sub_hv;
 			SV		*ref;
@@ -470,7 +432,7 @@ static void perl_parse_config(CONF_SECTION *cs, int lvl, HV *rad_hv)
 
 			perl_parse_config(sub_cs, lvl + 1, sub_hv);
 		} else if (cf_item_is_pair(ci)){
-			CONF_PAIR	*cp = cf_item_to_pair(ci);
+			CONF_PAIR	*cp = cf_itemtopair(ci);
 			char const	*key = cf_pair_attr(cp);	/* hash key */
 			char const	*value = cf_pair_value(cp);	/* hash value */
 
@@ -494,20 +456,6 @@ static void perl_parse_config(CONF_SECTION *cs, int lvl, HV *rad_hv)
 	DEBUG("%*s}", indent_section, " ");
 }
 
-static int mod_bootstrap(CONF_SECTION *conf, void *instance)
-{
-	rlm_perl_t	*inst = instance;
-
-	char const	*xlat_name;
-
-	xlat_name = cf_section_name2(conf);
-	if (!xlat_name) xlat_name = cf_section_name1(conf);
-
-	xlat_register(xlat_name, perl_xlat, NULL, inst);
-
-	return 0;
-}
-
 /*
  *	Do any per-module initialization that is separate to each
  *	configured instance of the module.  e.g. set up connections
@@ -524,21 +472,22 @@ static int mod_bootstrap(CONF_SECTION *conf, void *instance)
  */
 static int mod_instantiate(CONF_SECTION *conf, void *instance)
 {
-	rlm_perl_t	*inst = instance;
+	rlm_perl_t       *inst = instance;
 	AV		*end_AV;
 
-	char const	**embed_c;	/* Stupid Perl and lack of const consistency */
-	char		**embed;
-	char		**envp = NULL;
-	int		exitstatus = 0, argc=0;
-	char		arg[] = "0";
+	char const **embed_c;	/* Stupid Perl and lack of const consistency */
+	char **embed;
+	char **envp = NULL;
+	char const *xlat_name;
+	int exitstatus = 0, argc=0;
 
-	CONF_SECTION	*cs;
-
-#ifdef USE_ITHREADS
+	MEM(embed_c = talloc_zero_array(inst, char const *, 4));
+	memcpy(&embed, &embed_c, sizeof(embed));
 	/*
 	 *	Create pthread key. This key will be stored in instance
 	 */
+
+#ifdef USE_ITHREADS
 	pthread_mutex_init(&inst->clone_mutex, NULL);
 
 	inst->thread_key = rad_malloc(sizeof(*inst->thread_key));
@@ -547,11 +496,8 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	rlm_perl_make_key(inst->thread_key);
 #endif
 
-	/*
-	 *	Setup the argument array we pass to the perl interpreter
-	 */
-	MEM(embed_c = talloc_zero_array(inst, char const *, 4));
-	memcpy(&embed, &embed_c, sizeof(embed));
+	char arg[] = "0";
+
 	embed_c[0] = NULL;
 	if (inst->perl_flags) {
 		embed_c[1] = inst->perl_flags;
@@ -564,23 +510,14 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 		argc = 3;
 	}
 
-	/*
-	 *	Create tweak the server's environment to support
-	 *	perl. Docs say only call this once... Oops.
-	 */
-	if (!perl_sys_init3_called) {
-		PERL_SYS_INIT3(&argc, &embed, &envp);
-		perl_sys_init3_called = 1;
-	}
+	PERL_SYS_INIT3(&argc, &embed, &envp);
 
-	/*
-	 *	Allocate a new perl interpreter to do the parsing
-	 */
 	if ((inst->perl = perl_alloc()) == NULL) {
 		ERROR("rlm_perl: No memory for allocating new perl !");
-		return -1;
+		return (-1);
 	}
-	perl_construct(inst->perl);	/* ...and initialise it */
+
+	perl_construct(inst->perl);
 
 #ifdef USE_ITHREADS
 	PL_perl_destruct_level = 2;
@@ -600,22 +537,33 @@ static int mod_instantiate(CONF_SECTION *conf, void *instance)
 	end_AV = PL_endav;
 	PL_endav = (AV *)NULL;
 
-	if (exitstatus) {
-		ERROR("rlm_perl: perl_parse failed: %s not found or has syntax errors", inst->module);
-		return -1;
+	if(!exitstatus) {
+		perl_run(inst->perl);
+	} else {
+		ERROR("rlm_perl: perl_parse failed: %s not found or has syntax errors. \n", inst->module);
+		return (-1);
+	}
+
+	PL_endav = end_AV;
+
+	xlat_name = cf_section_name2(conf);
+	if (!xlat_name)
+		xlat_name = cf_section_name1(conf);
+	if (xlat_name) {
+		xlat_register(xlat_name, perl_xlat, NULL, inst);
 	}
 
 	/* parse perl configuration sub-section */
+	CONF_SECTION *cs;
 	cs = cf_section_sub_find(conf, "config");
 	if (cs) {
-		inst->rad_perlconf_hv = get_hv("RAD_PERLCONF", 1);
+		DEBUG("rlm_perl (%s): parsing 'config' section...", xlat_name);
+
+		inst->rad_perlconf_hv = get_hv("RAD_PERLCONF",1);
 		perl_parse_config(cs, 0, inst->rad_perlconf_hv);
+
+		DEBUG("rlm_perl (%s): done parsing 'config'.", xlat_name);
 	}
-
-	inst->perl_parsed = true;
-	perl_run(inst->perl);
-
-	PL_endav = end_AV;
 
 	return 0;
 }
@@ -631,7 +579,7 @@ static void perl_vp_to_svpvn_element(REQUEST *request, AV *av, VALUE_PAIR const 
 	case PW_TYPE_STRING:
 		RDEBUG("$%s{'%s'}[%i] = &%s:%s -> '%s'", hash_name, vp->da->name, *i,
 		       list_name, vp->da->name, vp->vp_strvalue);
-		av_push(av, newSVpvn(vp->vp_strvalue, vp->vp_length));
+		av_push(av, newSVpvn(vp->vp_strvalue, vp->length));
 		break;
 
 	default:
@@ -650,7 +598,7 @@ static void perl_vp_to_svpvn_element(REQUEST *request, AV *av, VALUE_PAIR const 
  *  	Example for this is Cisco-AVPair that holds multiple values.
  *  	Which will be available as array_ref in $RAD_REQUEST{'Cisco-AVPair'}
  */
-static void perl_store_vps(UNUSED TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **vps, HV *rad_hv,
+static void perl_store_vps(UNUSED TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR *vps, HV *rad_hv,
 			   const char *hash_name, const char *list_name)
 {
 	VALUE_PAIR *vp;
@@ -660,8 +608,8 @@ static void perl_store_vps(UNUSED TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR 
 	vp_cursor_t cursor;
 
 	RINDENT();
-	fr_pair_list_sort(vps, fr_pair_cmp_by_da_tag);
-	for (vp = fr_cursor_init(&cursor, vps);
+	pairsort(&vps, attrtagcmp);
+	for (vp = fr_cursor_init(&cursor, &vps);
 	     vp;
 	     vp = fr_cursor_next(&cursor)) {
 	     	VALUE_PAIR *next;
@@ -711,7 +659,7 @@ static void perl_store_vps(UNUSED TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR 
 		case PW_TYPE_STRING:
 			RDEBUG("$%s{'%s'} = &%s:%s -> '%s'", hash_name, vp->da->name, list_name,
 			       vp->da->name, vp->vp_strvalue);
-			(void)hv_store(rad_hv, name, strlen(name), newSVpvn(vp->vp_strvalue, vp->vp_length), 0);
+			(void)hv_store(rad_hv, name, strlen(name), newSVpvn(vp->vp_strvalue, vp->length), 0);
 			break;
 
 		default:
@@ -732,54 +680,50 @@ static void perl_store_vps(UNUSED TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR 
  *     Value Pair Format
  *
  */
-static void pairadd_sv(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **vps, char *key, SV *sv, FR_TOKEN op,
+static int pairadd_sv(TALLOC_CTX *ctx, REQUEST *request, VALUE_PAIR **vps, char *key, SV *sv, FR_TOKEN op,
 		      const char *hash_name, const char *list_name)
 {
-	char		*val = NULL;
+	char	    *val;
 	VALUE_PAIR      *vp;
-	STRLEN len;
 
-	if (!SvOK(sv)) {
-		REDEBUG("Internal failure creating pair &%s:%s %s $%s{'%s'} -> '%s'", list_name, key,
-			fr_int2str(fr_tokens, op, "<INVALID>"), hash_name, key, (val ? val : "undef"));
-		return;
+	if (SvOK(sv)) {
+		STRLEN len;
+		val = SvPV(sv, len);
+		vp = pairmake(ctx, vps, key, NULL, op);
+		if (!vp) {
+		fail:
+			REDEBUG("Failed to create pair %s:%s %s %s", list_name, key,
+				fr_int2str(fr_tokens, op, "<INVALID>"), val);
+			return -1;
+		}
+
+		switch (vp->da->type) {
+		case PW_TYPE_STRING:
+			pairstrncpy(vp, val, len);
+			break;
+
+		default:
+			if (pairparsevalue(vp, val, len) < 0) goto fail;
+		}
+
+		RDEBUG("&%s:%s %s $%s{'%s'} -> '%s'", list_name, key, fr_int2str(fr_tokens, op, "<INVALID>"),
+		       hash_name, key, val);
+		return 0;
 	}
-
-	val = SvPV(sv, len);
-	vp = fr_pair_make(ctx, vps, key, NULL, op);
-	if (!vp) {
-	fail:
-		REDEBUG("Failed to create pair - %s", fr_strerror());
-		REDEBUG("    &%s:%s %s $%s{'%s'} -> '%s'", list_name, key,
-			fr_int2str(fr_tokens, op, "<INVALID>"), hash_name, key, (val ? val : "undef"));
-		return;
-	}
-
-	switch (vp->da->type) {
-	case PW_TYPE_STRING:
-		fr_pair_value_bstrncpy(vp, val, len);
-		break;
-
-	default:
-		VERIFY_VP(vp);
-
-		if (fr_pair_value_from_str(vp, val, len) < 0) goto fail;
-	}
-
-	RDEBUG("&%s:%s %s $%s{'%s'} -> '%s'", list_name, key, fr_int2str(fr_tokens, op, "<INVALID>"),
-	       hash_name, key, val);
+	return -1;
 }
 
 /*
  *     Gets the content from hashes
  */
-static void get_hv_content(TALLOC_CTX *ctx, REQUEST *request, HV *my_hv, VALUE_PAIR **vps,
+static int get_hv_content(TALLOC_CTX *ctx, REQUEST *request, HV *my_hv, VALUE_PAIR **vps,
 			  const char *hash_name, const char *list_name)
 {
 	SV		*res_sv, **av_sv;
 	AV		*av;
 	char		*key;
 	I32		key_len, len, i, j;
+	int		ret = 0;
 
 	*vps = NULL;
 	for (i = hv_iterinit(my_hv); i > 0; i--) {
@@ -789,14 +733,12 @@ static void get_hv_content(TALLOC_CTX *ctx, REQUEST *request, HV *my_hv, VALUE_P
 			len = av_len(av);
 			for (j = 0; j <= len; j++) {
 				av_sv = av_fetch(av, j, 0);
-				pairadd_sv(ctx, request, vps, key, *av_sv, T_OP_ADD, hash_name, list_name);
+				ret = pairadd_sv(ctx, request, vps, key, *av_sv, T_OP_ADD, hash_name, list_name) + ret;
 			}
-		} else {
-			pairadd_sv(ctx, request, vps, key, res_sv, T_OP_EQ, hash_name, list_name);
-		}
+		} else ret = pairadd_sv(ctx, request, vps, key, res_sv, T_OP_EQ, hash_name, list_name) + ret;
 	}
 
-	if (*vps) VERIFY_LIST(*vps);
+	return ret;
 }
 
 /*
@@ -816,12 +758,10 @@ static int do_perl(void *instance, REQUEST *request, char const *function_name)
 	HV		*rad_check_hv;
 	HV		*rad_config_hv;
 	HV		*rad_request_hv;
-	HV		*rad_state_hv;
 #ifdef WITH_PROXY
 	HV		*rad_request_proxy_hv;
 	HV		*rad_request_proxy_reply_hv;
 #endif
-	SV		*rad_requestp_sv;
 
 	/*
 	 *	Radius has told us to call this function, but none
@@ -855,42 +795,30 @@ static int do_perl(void *instance, REQUEST *request, char const *function_name)
 		rad_check_hv = get_hv("RAD_CHECK", 1);
 		rad_config_hv = get_hv("RAD_CONFIG", 1);
 		rad_request_hv = get_hv("RAD_REQUEST", 1);
-		rad_state_hv = get_hv("RAD_STATE", 1);
-		rad_requestp_sv = get_sv("RAD___REQUESTP", 1);
 
-		perl_store_vps(request->packet, request, &request->packet->vps, rad_request_hv, "RAD_REQUEST", "request");
-		perl_store_vps(request->reply, request, &request->reply->vps, rad_reply_hv, "RAD_REPLY", "reply");
-		perl_store_vps(request, request, &request->config, rad_check_hv, "RAD_CHECK", "control");
-		perl_store_vps(request, request, &request->config, rad_config_hv, "RAD_CONFIG", "control");
-		perl_store_vps(request->state_ctx, request, &request->state, rad_state_hv, "RAD_STATE", "session-state");
+		perl_store_vps(request->packet, request, request->packet->vps, rad_request_hv, "RAD_REQUEST", "request");
+		perl_store_vps(request->reply, request, request->reply->vps, rad_reply_hv, "RAD_REPLY", "reply");
+		perl_store_vps(request, request, request->config_items, rad_check_hv, "RAD_CHECK", "control");
+		perl_store_vps(request, request, request->config_items, rad_config_hv, "RAD_CONFIG", "control");
 
 #ifdef WITH_PROXY
 		rad_request_proxy_hv = get_hv("RAD_REQUEST_PROXY",1);
 		rad_request_proxy_reply_hv = get_hv("RAD_REQUEST_PROXY_REPLY",1);
 
 		if (request->proxy != NULL) {
-			perl_store_vps(request->proxy, request, &request->proxy->vps, rad_request_proxy_hv,
+			perl_store_vps(request->proxy, request, request->proxy->vps, rad_request_proxy_hv,
 				       "RAD_REQUEST_PROXY", "proxy-request");
 		} else {
 			hv_undef(rad_request_proxy_hv);
 		}
 
 		if (request->proxy_reply != NULL) {
-			perl_store_vps(request->proxy_reply, request, &request->proxy_reply->vps,
+			perl_store_vps(request->proxy_reply, request, request->proxy_reply->vps,
 				       rad_request_proxy_reply_hv, "RAD_REQUEST_PROXY_REPLY", "proxy-reply");
 		} else {
 			hv_undef(rad_request_proxy_reply_hv);
 		}
 #endif
-
-		/*
-		 * Store pointer to request structure globally so xlat works
-		 * We mark it read-only for interpreter so end users will not be
-		 * in posession to change it and crash radiusd with bogus pointer
-		 */
-		SvREADONLY_off(rad_requestp_sv);
-		sv_setiv(rad_requestp_sv, PTR2IV(request));
-		SvREADONLY_on(rad_requestp_sv);
 
 		PUSHMARK(SP);
 		/*
@@ -906,8 +834,9 @@ static int do_perl(void *instance, REQUEST *request, char const *function_name)
 		SPAGAIN;
 
 		if (SvTRUE(ERRSV)) {
-			RDEBUG("perl_embed:: module = %s , func = %s exit status= %s\n",
-			       inst->module, function_name, SvPV(ERRSV,n_a));
+			ERROR("rlm_perl: perl_embed:: module = %s , func = %s exit status= %s\n",
+			       inst->module,
+			       function_name, SvPV(ERRSV,n_a));
 			(void)POPs;
 		}
 
@@ -924,61 +853,47 @@ static int do_perl(void *instance, REQUEST *request, char const *function_name)
 		LEAVE;
 
 		vp = NULL;
-		get_hv_content(request->packet, request, rad_request_hv, &vp, "RAD_REQUEST", "request");
-		if (vp) {
-			fr_pair_list_free(&request->packet->vps);
+		if ((get_hv_content(request->packet, request, rad_request_hv, &vp, "RAD_REQUEST", "request")) == 0) {
+			pairfree(&request->packet->vps);
 			request->packet->vps = vp;
 			vp = NULL;
 
 			/*
 			 *	Update cached copies
 			 */
-			request->username = fr_pair_find_by_num(request->packet->vps, PW_USER_NAME, 0, TAG_ANY);
-			request->password = fr_pair_find_by_num(request->packet->vps, PW_USER_PASSWORD, 0, TAG_ANY);
+			request->username = pairfind(request->packet->vps, PW_USER_NAME, 0, TAG_ANY);
+			request->password = pairfind(request->packet->vps, PW_USER_PASSWORD, 0, TAG_ANY);
 			if (!request->password)
-				request->password = fr_pair_find_by_num(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY);
+				request->password = pairfind(request->packet->vps, PW_CHAP_PASSWORD, 0, TAG_ANY);
 		}
 
-		get_hv_content(request->reply, request, rad_reply_hv, &vp, "RAD_REPLY", "reply");
-		if (vp) {
-			fr_pair_list_free(&request->reply->vps);
+		if ((get_hv_content(request->reply, request, rad_reply_hv, &vp, "RAD_REPLY", "reply")) == 0) {
+			pairfree(&request->reply->vps);
 			request->reply->vps = vp;
 			vp = NULL;
 		}
 
-		get_hv_content(request, request, rad_check_hv, &vp, "RAD_CHECK", "control");
-		if (vp) {
-			fr_pair_list_free(&request->config);
-			request->config = vp;
-			vp = NULL;
-		}
-
-		get_hv_content(request->state_ctx, request, rad_state_hv, &vp, "RAD_STATE", "session-state");
-		if (vp) {
-			fr_pair_list_free(&request->state);
-			request->state = vp;
+		if ((get_hv_content(request, request, rad_check_hv, &vp, "RAD_CHECK", "control")) == 0) {
+			pairfree(&request->config_items);
+			request->config_items = vp;
 			vp = NULL;
 		}
 
 #ifdef WITH_PROXY
-		if (request->proxy) {
-			get_hv_content(request->proxy, request, rad_request_proxy_hv, &vp,
-			    "RAD_REQUEST_PROXY", "proxy-request");
-			if (vp) {
-				fr_pair_list_free(&request->proxy->vps);
-				request->proxy->vps = vp;
-				vp = NULL;
-			}
+		if (request->proxy &&
+		    (get_hv_content(request->proxy, request, rad_request_proxy_hv, &vp,
+		    		    "RAD_REQUEST_PROXY", "proxy-request") == 0)) {
+			pairfree(&request->proxy->vps);
+			request->proxy->vps = vp;
+			vp = NULL;
 		}
 
-		if (request->proxy_reply) {
-			get_hv_content(request->proxy_reply, request, rad_request_proxy_reply_hv, &vp,
-			    "RAD_REQUEST_PROXY_REPLY", "proxy-reply");
-			if (vp) {
-				fr_pair_list_free(&request->proxy_reply->vps);
-				request->proxy_reply->vps = vp;
-				vp = NULL;
-			}
+		if (request->proxy_reply &&
+		    (get_hv_content(request->proxy_reply, request, rad_request_proxy_reply_hv, &vp,
+		    		    "RAD_REQUEST_PROXY_REPLY", "proxy-reply") == 0)) {
+			pairfree(&request->proxy_reply->vps);
+			request->proxy_reply->vps = vp;
+			vp = NULL;
 		}
 #endif
 
@@ -1018,15 +933,16 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 	VALUE_PAIR	*pair;
 	int 		acctstatustype=0;
 
-	if ((pair = fr_pair_find_by_num(request->packet->vps, PW_ACCT_STATUS_TYPE, 0, TAG_ANY)) != NULL) {
+	if ((pair = pairfind(request->packet->vps, PW_ACCT_STATUS_TYPE, 0, TAG_ANY)) != NULL) {
 		acctstatustype = pair->vp_integer;
 	} else {
-		RDEBUG("Invalid Accounting Packet");
+		ERROR("Invalid Accounting Packet");
 		return RLM_MODULE_INVALID;
 	}
 
 	switch (acctstatustype) {
 	case PW_STATUS_START:
+
 		if (((rlm_perl_t *)instance)->func_start_accounting) {
 			return do_perl(instance, request,
 				       ((rlm_perl_t *)instance)->func_start_accounting);
@@ -1034,8 +950,10 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 			return do_perl(instance, request,
 				       ((rlm_perl_t *)instance)->func_accounting);
 		}
+		break;
 
 	case PW_STATUS_STOP:
+
 		if (((rlm_perl_t *)instance)->func_stop_accounting) {
 			return do_perl(instance, request,
 				       ((rlm_perl_t *)instance)->func_stop_accounting);
@@ -1043,6 +961,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_accounting(void *instance, REQUEST *requ
 			return do_perl(instance, request,
 				       ((rlm_perl_t *)instance)->func_accounting);
 		}
+		break;
 
 	default:
 		return do_perl(instance, request,
@@ -1060,13 +979,43 @@ static int mod_detach(void *instance)
 	rlm_perl_t	*inst = (rlm_perl_t *) instance;
 	int 		exitstatus = 0, count = 0;
 
+	if (inst->rad_perlconf_hv != NULL) {
+		hv_undef(inst->rad_perlconf_hv);
+	}
 
-	if (inst->perl_parsed) {
+#if 0
+	/*
+	 *	FIXME: Call this in the destruct function?
+	 */
+	{
+		dTHXa(handle->clone);
+		PERL_SET_CONTEXT(handle->clone);
+		{
+			dSP; ENTER; SAVETMPS; PUSHMARK(SP);
+			count = call_pv(inst->func_detach, G_SCALAR | G_EVAL );
+			SPAGAIN;
+
+			if (count == 1) {
+				exitstatus = POPi;
+				/*
+				 * FIXME: bug in perl
+				 *
+				 */
+				if (exitstatus >= 100 || exitstatus < 0) {
+					exitstatus = RLM_MODULE_FAIL;
+				}
+			}
+			PUTBACK;
+			FREETMPS;
+			LEAVE;
+		}
+	}
+#endif
+
+	if (inst->func_detach) {
 		dTHXa(inst->perl);
 		PERL_SET_CONTEXT(inst->perl);
-		if (inst->rad_perlconf_hv != NULL) hv_undef(inst->rad_perlconf_hv);
-
-		if (inst->func_detach) {
+		{
 			dSP; ENTER; SAVETMPS;
 			PUSHMARK(SP);
 
@@ -1093,12 +1042,7 @@ static int mod_detach(void *instance)
 	perl_free(inst->perl);
 #endif
 
-	/*
-	 *	Hope this is not really needed.
-	 *	Is only allowed to be called once just before exit().
-	 *
-	 PERL_SYS_TERM();
-	*/
+	PERL_SYS_TERM();
 	return exitstatus;
 }
 DIAG_ON(nested-externs)
@@ -1112,34 +1056,34 @@ DIAG_ON(nested-externs)
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
-extern module_t rlm_perl;
 module_t rlm_perl = {
-	.magic		= RLM_MODULE_INIT,
-	.name		= "perl",
+	RLM_MODULE_INIT,
+	"perl",				/* Name */
 #ifdef USE_ITHREADS
-	.type		= RLM_TYPE_THREAD_SAFE,
+	RLM_TYPE_THREAD_SAFE,		/* type */
 #else
-	.type		= RLM_TYPE_THREAD_UNSAFE,
+	RLM_TYPE_THREAD_UNSAFE,
 #endif
-	.inst_size	= sizeof(rlm_perl_t),
-	.config		= module_config,
-	.bootstrap	= mod_bootstrap,
-	.instantiate	= mod_instantiate,
-	.detach		= mod_detach,
-	.methods = {
-		[MOD_AUTHENTICATE]	= mod_authenticate,
-		[MOD_AUTHORIZE]		= mod_authorize,
-		[MOD_PREACCT]		= mod_preacct,
-		[MOD_ACCOUNTING]	= mod_accounting,
-		[MOD_SESSION]		= mod_checksimul,
+	sizeof(rlm_perl_t),
+	module_config,
+	mod_instantiate,		/* instantiation */
+	mod_detach,			/* detach */
+	{
+		mod_authenticate,	/* authenticate */
+		mod_authorize,		/* authorize */
+		mod_preacct,		/* preacct */
+		mod_accounting,	/* accounting */
+		mod_checksimul,      	/* check simul */
 #ifdef WITH_PROXY
-		[MOD_PRE_PROXY]		= mod_pre_proxy,
-		[MOD_POST_PROXY]	= mod_post_proxy,
+		mod_pre_proxy,		/* pre-proxy */
+		mod_post_proxy,	/* post-proxy */
+#else
+		NULL, NULL,
 #endif
-		[MOD_POST_AUTH]		= mod_post_auth,
+		mod_post_auth		/* post-auth */
 #ifdef WITH_COA
-		[MOD_RECV_COA]		= mod_recv_coa,
-		[MOD_SEND_COA]		= mod_send_coa
+		, mod_recv_coa,
+		mod_send_coa
 #endif
 	},
 };

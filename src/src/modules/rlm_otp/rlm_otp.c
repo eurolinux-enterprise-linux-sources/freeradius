@@ -1,8 +1,7 @@
 /*
  *   This program is is free software; you can redistribute it and/or modify
- *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or (at
- *   your option) any later version.
+ *   it under the terms of the GNU General Public License, version 2 if the
+ *   License as published by the Free Software Foundation.
  *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -48,7 +47,8 @@ static const CONF_PARSER module_config[] = {
 	{ "mschapv2_mppe_bits", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_otp_t, mschapv2_mppe_types), "2" },
 	{ "mschap_mppe", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_otp_t, mschap_mppe_policy), "2" },
 	{ "mschap_mppe_bits", FR_CONF_OFFSET(PW_TYPE_INTEGER, rlm_otp_t, mschap_mppe_types), "2" },
-	CONF_PARSER_TERMINATOR
+
+	{ NULL, -1, 0, NULL, NULL }		/* end the list */
 };
 
 
@@ -134,7 +134,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 		VALUE_PAIR *vp;
 
 		auth_type_found = 0;
-		vp = fr_pair_find_by_num(request->config, PW_AUTH_TYPE, 0, TAG_ANY);
+		vp = pairfind(request->config_items, PW_AUTHTYPE, 0, TAG_ANY);
 		if (vp) {
 			auth_type_found = 1;
 			if (strcmp(vp->vp_strvalue, inst->name)) {
@@ -144,7 +144,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	}
 
 	/* The State attribute will be present if this is a response. */
-	if (fr_pair_find_by_num(request->packet->vps, PW_STATE, 0, TAG_ANY) != NULL) {
+	if (pairfind(request->packet->vps, PW_STATE, 0, TAG_ANY) != NULL) {
 		DEBUG("rlm_otp: autz: Found response to Access-Challenge");
 
 		return RLM_MODULE_OK;
@@ -177,7 +177,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	if (inst->allow_sync && !inst->allow_async) {
 		/* This is the token sync response. */
 		if (!auth_type_found) {
-			pair_make_config("Auth-Type", inst->name, T_OP_EQ);
+			pairmake_config("Auth-Type", inst->name, T_OP_EQ);
 		}
 
 		return RLM_MODULE_OK;
@@ -213,13 +213,13 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 		len = otp_gen_state(gen_state, challenge, inst->challenge_len,
 				    0, now, inst->hmac_key);
 
-		vp = fr_pair_afrom_num(request->reply, PW_STATE, 0);
+		vp = paircreate(request->reply, PW_STATE, 0);
 		if (!vp) {
 			return RLM_MODULE_FAIL;
 		}
 
-		fr_pair_value_memcpy(vp, (uint8_t const *) gen_state, len);
-		fr_pair_add(&request->reply->vps, vp);
+		pairmemcpy(vp, (uint8_t const *) gen_state, len);
+		pairadd(&request->reply->vps, vp);
 	}
 
 	/*
@@ -235,15 +235,15 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 		 *	First add the internal OTP challenge attribute to
 		 *	the reply list.
 		 */
-		vp = fr_pair_afrom_num(request->reply, PW_OTP_CHALLENGE, 0);
+		vp = paircreate(request->reply, PW_OTP_CHALLENGE, 0);
 		if (!vp) {
 			return RLM_MODULE_FAIL;
 		}
 
-		fr_pair_value_strcpy(vp, challenge);
+		pairstrcpy(vp, challenge);
 		vp->op = T_OP_SET;
 
-		fr_pair_add(&request->reply->vps, vp);
+		pairadd(&request->reply->vps, vp);
 
 		/*
 		 *	Then add the message to the user to they known
@@ -255,7 +255,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 			return RLM_MODULE_FAIL;
 		}
 
-		vp = fr_pair_afrom_num(request->reply, PW_REPLY_MESSAGE, 0);
+		vp = paircreate(request->reply, PW_REPLY_MESSAGE, 0);
 		if (!vp) {
 			talloc_free(expanded);
 			return RLM_MODULE_FAIL;
@@ -263,11 +263,11 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 
 		(void) talloc_steal(vp, expanded);
 		vp->vp_strvalue = expanded;
-		vp->vp_length = len;
+		vp->length = len;
 		vp->op = T_OP_SET;
 		vp->type = VT_DATA;
 
-		fr_pair_add(&request->reply->vps, vp);
+		pairadd(&request->reply->vps, vp);
 	}
 
 	/*
@@ -279,7 +279,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authorize(void *instance, REQUEST *reque
 	DEBUG("rlm_otp: Sending Access-Challenge");
 
 	if (!auth_type_found) {
-		pair_make_config("Auth-Type", inst->name, T_OP_EQ);
+		pairmake_config("Auth-Type", inst->name, T_OP_EQ);
 	}
 
 	return RLM_MODULE_HANDLED;
@@ -324,7 +324,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 	/*
 	 *	Retrieve the challenge (from State attribute).
 	 */
-	vp = fr_pair_find_by_num(request->packet->vps, PW_STATE, 0, TAG_ANY);
+	vp = pairfind(request->packet->vps, PW_STATE, 0, TAG_ANY);
 	if (vp) {
 		char	gen_state[OTP_MAX_RADSTATE_LEN]; //!< State as hexits
 		uint8_t	bin_state[OTP_MAX_RADSTATE_LEN];
@@ -338,7 +338,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 */
 		elen = (inst->challenge_len * 2) + 8 + 8 + 32;
 
-		if (vp->vp_length != elen) {
+		if (vp->length != elen) {
 			REDEBUG("Bad radstate for [%s]: length", username);
 			return RLM_MODULE_INVALID;
 		}
@@ -354,8 +354,8 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 *	There are notes in otp_radstate as to why the state
 		 *	value is encoded as hexits.
 		 */
-		len = fr_hex2bin(bin_state, sizeof(bin_state), vp->vp_strvalue, vp->vp_length);
-		if (len != (vp->vp_length / 2)) {
+		len = fr_hex2bin(bin_state, sizeof(bin_state), vp->vp_strvalue, vp->length);
+		if (len != (vp->length / 2)) {
 			REDEBUG("bad radstate for [%s]: not hex", username);
 
 			return RLM_MODULE_INVALID;
@@ -382,7 +382,7 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
 		 *	against generated state (in hex form)
 		 *	to verify hmac.
 		 */
-		if (memcmp(gen_state, vp->vp_octets, vp->vp_length)) {
+		if (memcmp(gen_state, vp->vp_octets, vp->length)) {
 			REDEBUG("bad radstate for [%s]: hmac", username);
 
 			return RLM_MODULE_REJECT;
@@ -416,16 +416,22 @@ static rlm_rcode_t CC_HINT(nonnull) mod_authenticate(void *instance, REQUEST *re
  *	The server will then take care of ensuring that the module
  *	is single-threaded.
  */
-extern module_t rlm_otp;
 module_t rlm_otp = {
-	.magic		= RLM_MODULE_INIT,
-	.name		= "otp",
-	.type		= RLM_TYPE_THREAD_SAFE,
-	.inst_size	= sizeof(rlm_otp_t),
-	.config		= module_config,
-	.instantiate	= mod_instantiate,
-	.methods = {
-		[MOD_AUTHENTICATE]	= mod_authenticate,
-		[MOD_AUTHORIZE]		= mod_authorize
+	RLM_MODULE_INIT,
+	"otp",
+	RLM_TYPE_THREAD_SAFE,		/* type */
+	sizeof(rlm_otp_t),
+	module_config,
+	mod_instantiate,		/* instantiation */
+	NULL,				/* detach */
+	{
+		mod_authenticate,	/* authentication */
+		mod_authorize,		/* authorization */
+		NULL,			/* preaccounting */
+		NULL,			/* accounting */
+		NULL,			/* checksimul */
+		NULL,			/* pre-proxy */
+		NULL,			/* post-proxy */
+		NULL			/* post-auth */
 	},
 };
